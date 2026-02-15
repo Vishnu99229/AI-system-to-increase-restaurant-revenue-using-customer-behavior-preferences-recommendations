@@ -16,13 +16,16 @@ const OpenAI = require("openai");
 const twilio = require("twilio");
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // --- Middleware ---
 app.use(express.json());
 app.use(
     cors({
-        origin: "http://localhost:5173",
+        origin: [
+            "http://localhost:5173",
+            "https://qr-menu-upsell.vercel.app",
+        ],
     })
 );
 
