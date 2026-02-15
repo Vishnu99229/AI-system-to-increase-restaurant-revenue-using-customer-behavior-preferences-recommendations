@@ -29,6 +29,11 @@ app.use(
     })
 );
 
+// --- Health Check ---
+app.get("/", (req, res) => {
+    res.json({ status: "ok", service: "goschedule-qr-backend" });
+});
+
 // --- OpenAI Client ---
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
