@@ -4,6 +4,8 @@ export interface RephraseRequest {
     deterministicReason: string;
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
 export interface RephraseResponse {
     reason: string;
 }
@@ -18,7 +20,7 @@ export async function rephraseReason(
     deterministicReason: string
 ): Promise<string | null> {
     try {
-        const response = await fetch("http://localhost:3001/api/rephrase", {
+        const response = await fetch(`${API_BASE}/api/rephrase`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -48,7 +50,7 @@ export async function rephraseReason(
  */
 export async function trackUpsellShown(): Promise<void> {
     try {
-        await fetch("http://localhost:3001/api/upsell-shown", { method: "POST" });
+        await fetch(`${API_BASE}/api/upsell-shown`, { method: "POST" });
     } catch (error) {
         // Analytics should not block app flow
         console.warn("Analytics error (upsell-shown):", error);
@@ -68,7 +70,7 @@ export async function trackOrderComplete(
     tableNumber: string = ""
 ): Promise<void> {
     try {
-        await fetch("http://localhost:3001/api/order-complete", {
+        await fetch(`${API_BASE}/api/order-complete`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

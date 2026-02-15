@@ -6,6 +6,8 @@ interface RestaurantConfig {
     maxTables: number;
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
 export default function QRPrintPage() {
     const [config, setConfig] = useState<RestaurantConfig | null>(null);
     const [error, setError] = useState("");
@@ -20,7 +22,7 @@ export default function QRPrintPage() {
             return;
         }
 
-        fetch(`http://localhost:3001/api/restaurant/${restaurantId}`)
+        fetch(`${API_BASE}/api/restaurant/${restaurantId}`)
             .then(res => {
                 if (!res.ok) throw new Error("Restaurant not found");
                 return res.json();

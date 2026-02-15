@@ -6,6 +6,8 @@ import InvalidTable from "./screens/InvalidTable";
 import QRPrintPage from "./screens/QRPrintPage";
 import { AppProvider, useApp } from "./contexts/AppContext";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
 function AppContent() {
     const { state, dispatch } = useApp();
     const [screen, setScreen] = useState<"landing" | "menu" | "checkout">("landing");
@@ -29,7 +31,7 @@ function AppContent() {
 
         // Fetch restaurant config to validate maxTables
         setValidating(true);
-        fetch(`http://localhost:3001/api/restaurant/${restaurant}`)
+        fetch(`${API_BASE}/api/restaurant/${restaurant}`)
             .then(res => {
                 if (!res.ok) throw new Error("not found");
                 return res.json();
