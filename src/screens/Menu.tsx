@@ -190,7 +190,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             {loadingRec ? (
                                 <div className="flex items-center space-x-3 text-gray-500 animate-pulse">
                                     <div className="w-5 h-5 border-2 border-gray-300 border-t-orange-500 rounded-full animate-spin"></div>
-                                    <span>Consulting our AI Sommelier...</span>
+                                    <span>Finding best pairing...</span>
                                 </div>
                             ) : recommendation ? (
                                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
