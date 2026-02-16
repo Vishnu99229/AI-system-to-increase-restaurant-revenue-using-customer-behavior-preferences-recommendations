@@ -32,9 +32,17 @@ export default function Checkout({ onBack }: CheckoutProps) {
     // Track if we've already evaluated the upsell decision (once per checkout mount)
     const hasEvaluatedUpsell = useRef(false);
 
-    // Explicit state tracking for upsell acceptance (not derived from cart)
-    const [upsellAccepted, setUpsellAccepted] = useState(false);
-    const [upsellValue, setUpsellValue] = useState(0);
+    // Explicit state tracking for upsell acceptance
+    // Initialize from menu-level acceptance state so "Add Both to Order" flows through
+    const menuUpsellAccepted = state.recommendationAcceptedBeforeCheckout;
+    const menuUpsellValue = menuUpsellAccepted
+        ? cartItems
+            .filter(item => state.pairingAcceptedByItemId[item.id])
+            .reduce((sum, item) => sum + parsePrice(item.price), 0)
+        : 0;
+
+    const [upsellAccepted, setUpsellAccepted] = useState(menuUpsellAccepted);
+    const [upsellValue, setUpsellValue] = useState(menuUpsellValue);
 
     // Evaluate upsell ONCE at checkout mount - pure function logic
     // This effect intentionally runs only once per checkout visit

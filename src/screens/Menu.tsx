@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getRecommendations, MENU_ITEMS } from "../utils/recommendations";
-import { rephraseReason } from "../utils/api";
+import { rephraseReason, trackUpsellShown } from "../utils/api";
 import type { Item, Recommendation } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 
@@ -19,6 +19,20 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
     const [loadingRec, setLoadingRec] = useState(false);
     const [showAddedToast, setShowAddedToast] = useState(false);
+
+    // Track which recommendation IDs have already been sent to analytics
+    const trackedRecIds = useRef<Set<number>>(new Set());
+
+    // Fire trackUpsellShown() when a menu-level recommendation becomes visible
+    useEffect(() => {
+        if (recommendation && !loadingRec) {
+            if (!trackedRecIds.current.has(recommendation.item.id)) {
+                trackedRecIds.current.add(recommendation.item.id);
+                trackUpsellShown();
+                dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
+            }
+        }
+    }, [recommendation, loadingRec, dispatch]);
 
     const handleItemClick = async (item: Item) => {
         setSelectedItem(item);
