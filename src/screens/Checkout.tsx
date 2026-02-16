@@ -142,7 +142,12 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const tax = subtotal * 0.05;
     const total = subtotal + tax;
 
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
     const handlePlaceOrder = () => {
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+
         console.log("Order placed:", {
             user: state.userName,
             items: cartItems,
@@ -289,9 +294,13 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
                     <button
                         onClick={handlePlaceOrder}
-                        className="w-full bg-gray-900 hover:bg-black text-white py-5 rounded-2xl text-xl font-bold shadow-lg hover:shadow-xl transition-all"
+                        disabled={isSubmitting}
+                        className={`w-full py-5 rounded-2xl text-xl font-bold shadow-lg transition-all ${isSubmitting
+                                ? "bg-gray-400 cursor-not-allowed"
+                                : "bg-gray-900 hover:bg-black hover:shadow-xl text-white"
+                            }`}
                     >
-                        Place Order
+                        {isSubmitting ? "Processing..." : "Place Order"}
                     </button>
                 </div>
             )}
