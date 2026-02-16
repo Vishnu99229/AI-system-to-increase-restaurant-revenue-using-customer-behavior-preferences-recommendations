@@ -41,11 +41,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     };
 
     const menuUpsellAccepted = state.recommendationAcceptedBeforeCheckout;
-    const menuUpsellValue = menuUpsellAccepted
-        ? cartItems
-            .filter(item => state.pairingAcceptedByItemId[item.id])
-            .reduce((sum, item) => sum + parsePrice(item.price), 0)
-        : 0;
+    const menuUpsellValue = menuUpsellAccepted ? state.menuUpsellItemPrice : 0;
 
     const [upsellAccepted, setUpsellAccepted] = useState(menuUpsellAccepted);
     const [upsellValue, setUpsellValue] = useState(menuUpsellValue);

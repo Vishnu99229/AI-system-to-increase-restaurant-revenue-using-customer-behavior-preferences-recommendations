@@ -20,17 +20,15 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [loadingRec, setLoadingRec] = useState(false);
     const [showAddedToast, setShowAddedToast] = useState(false);
 
-    // Track which recommendation IDs have already been sent to analytics
-    const trackedRecIds = useRef<Set<number>>(new Set());
+    // Guard: fires once per modal open, resets when modal closes
+    const hasTrackedCurrentModal = useRef(false);
 
     // Fire trackUpsellShown() when a menu-level recommendation becomes visible
     useEffect(() => {
-        if (recommendation && !loadingRec) {
-            if (!trackedRecIds.current.has(recommendation.item.id)) {
-                trackedRecIds.current.add(recommendation.item.id);
-                trackUpsellShown();
-                dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
-            }
+        if (recommendation && !loadingRec && !hasTrackedCurrentModal.current) {
+            hasTrackedCurrentModal.current = true;
+            trackUpsellShown();
+            dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
     }, [recommendation, loadingRec, dispatch]);
 
@@ -68,6 +66,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const closeDetail = () => {
         setSelectedItem(null);
         setRecommendation(null);
+        hasTrackedCurrentModal.current = false; // Reset for next modal open
     };
 
     const handleAddToOrder = (itemsToAdd: Item[]) => {
@@ -83,6 +82,9 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         // Mark BOTH items as pairing-accepted so neither triggers checkout upsell
         dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: mainItem.id });
         dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: recommendedItem.id });
+        // Store only the recommended item's price for analytics (not the cart total)
+        const recPrice = parseFloat(recommendedItem.price.replace(/[^0-9.]/g, "")) || 0;
+        dispatch({ type: "SET_MENU_UPSELL_ITEM_PRICE", payload: recPrice });
         dispatch({ type: "ADD_TO_CART", payload: mainItem });
         dispatch({ type: "ADD_TO_CART", payload: recommendedItem });
         setShowAddedToast(true);

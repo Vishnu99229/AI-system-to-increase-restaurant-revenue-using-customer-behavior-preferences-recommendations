@@ -34,6 +34,7 @@ export interface AppState {
     lastItemAddedId: number | null;
     pairingAcceptedByItemId: Record<number, boolean>;
     checkoutUpsellShownByItemId: Record<number, boolean>;
+    menuUpsellItemPrice: number;
     upsellMetrics: UpsellMetrics;
 }
 
@@ -57,6 +58,7 @@ const initialState: AppState = {
     lastItemAddedId: null,
     pairingAcceptedByItemId: {},
     checkoutUpsellShownByItemId: {},
+    menuUpsellItemPrice: 0,
     upsellMetrics: {
         pairingShownCount: 0,
         pairingAcceptedCount: 0,
@@ -80,6 +82,7 @@ export type AppAction =
     | { type: "MARK_PAIRING_ACCEPTED_FOR_ITEM"; payload: number }
     | { type: "MARK_CHECKOUT_UPSELL_SHOWN_FOR_ITEM"; payload: number }
     | { type: "INCREMENT_UPSELL_METRIC"; payload: keyof UpsellMetrics }
+    | { type: "SET_MENU_UPSELL_ITEM_PRICE"; payload: number }
     | { type: "SET_TABLE_INFO"; payload: { restaurantId: string; tableNumber: string } }
     | { type: "RESET_SESSION_AFTER_ORDER" }
     | { type: "LOGOUT" };
@@ -131,6 +134,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
                     [action.payload]: true,
                 },
             };
+        case "SET_MENU_UPSELL_ITEM_PRICE":
+            return { ...state, menuUpsellItemPrice: action.payload };
         case "SET_TABLE_INFO":
             return {
                 ...state,
@@ -148,6 +153,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                 lastItemAddedId: null,
                 pairingAcceptedByItemId: {},
                 checkoutUpsellShownByItemId: {},
+                menuUpsellItemPrice: 0,
                 // restaurantId/tableNumber persist — table is locked for the session
                 // upsellMetrics are session-level and persist across orders
             };
@@ -196,6 +202,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     lastItemAddedId: parsed.lastItemAddedId ?? null,
                     pairingAcceptedByItemId: parsed.pairingAcceptedByItemId ?? {},
                     checkoutUpsellShownByItemId: parsed.checkoutUpsellShownByItemId ?? {},
+                    menuUpsellItemPrice: parsed.menuUpsellItemPrice ?? 0,
                     upsellMetrics: parsed.upsellMetrics ?? {
                         pairingShownCount: 0,
                         pairingAcceptedCount: 0,
