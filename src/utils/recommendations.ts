@@ -135,7 +135,7 @@ export function getDeterministicUpsell(
 
 export async function getRecommendations(
     viewedItem: Item,
-    allItems: Item[] // unused but kept for signature
+    _allItems: Item[] // unused but kept for signature
 ): Promise<Recommendation> {
     const rec = getDeterministicUpsell(viewedItem, []);
 
@@ -154,7 +154,7 @@ export async function getRecommendations(
 
 export function getCheckoutUpsellCandidates(
     cartItems: Item[],
-    viewedItems: Item[]
+    _viewedItems: Item[]
 ): Item[] {
     // Only used for checkout upsell logic - implement simplified logic
     if (cartItems.length === 0) return [];
@@ -167,8 +167,8 @@ export function getCheckoutUpsellCandidates(
 }
 
 export async function rankCandidatesAI(
-    userName: string,
-    cartItems: Item[],
+    _userName: string,
+    _cartItems: Item[],
     approvedCandidates: Item[]
 ): Promise<Recommendation | null> {
     if (approvedCandidates.length === 0) return null;
@@ -182,5 +182,5 @@ export async function getCheckoutUpsell(
 ): Promise<Recommendation | null> {
     const candidates = getCheckoutUpsellCandidates(cartItems, viewedItems);
     if (candidates.length === 0) return null;
-    return { item: candidates[0], reason: "Add a sweet treat?" };
+    return await rankCandidatesAI(userName, cartItems, candidates);
 }
