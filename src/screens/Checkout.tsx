@@ -34,6 +34,12 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
     // Explicit state tracking for upsell acceptance
     // Initialize from menu-level acceptance state so "Add Both to Order" flows through
+
+    // Helper to parse price string like "₹180" -> 180.00
+    const parsePrice = (priceStr: string) => {
+        return parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
+    };
+
     const menuUpsellAccepted = state.recommendationAcceptedBeforeCheckout;
     const menuUpsellValue = menuUpsellAccepted
         ? cartItems
@@ -135,10 +141,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
         }
     }, [upsellData?.item.id, showUpsell]);
 
-    // Helper to parse price string like "$16.00" -> 16.00
-    const parsePrice = (priceStr: string) => {
-        return parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
-    };
 
     const subtotal = cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0);
     const tax = subtotal * 0.05;
