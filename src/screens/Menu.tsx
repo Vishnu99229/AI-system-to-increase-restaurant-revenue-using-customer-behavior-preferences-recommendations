@@ -93,7 +93,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     return (
-    return (
         <div className="min-h-screen bg-warm-bg pb-24 relative">
             {/* View Order Floating Button - Always visible when cart has items */}
             {state.cartItems.length > 0 && (
