@@ -61,7 +61,7 @@ function AppContent() {
 
     if (tableError) {
         return (
-            <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-2xl overflow-hidden">
+            <div className="max-w-md mx-auto min-h-screen bg-warm-bg shadow-2xl overflow-hidden">
                 <InvalidTable />
             </div>
         );

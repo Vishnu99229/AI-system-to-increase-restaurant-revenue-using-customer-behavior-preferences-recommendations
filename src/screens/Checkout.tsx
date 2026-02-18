@@ -187,17 +187,17 @@ export default function Checkout({ onBack }: CheckoutProps) {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col">
-            <div className="bg-white px-6 py-6 shadow-sm z-10 sticky top-0">
+        <div className="min-h-screen bg-warm-bg flex flex-col">
+            <div className="bg-warm-bg px-6 py-4 shadow-sm z-10 sticky top-0 border-b border-primary/10">
                 <button
                     onClick={onBack}
-                    className="text-gray-400 hover:text-gray-600 mb-4 text-sm font-medium flex items-center transition-colors"
+                    className="text-highlight hover:text-dark mb-4 text-sm font-medium flex items-center transition-colors"
                 >
                     ← Back to Menu
                 </button>
-                <h1 className="text-3xl font-bold">Your Order</h1>
+                <h1 className="text-3xl font-heading font-bold text-dark">Your Order</h1>
                 {state.tableNumber && (
-                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm font-medium text-amber-800">
+                    <div className="mt-3 bg-primary/10 border border-primary/20 rounded-lg px-4 py-2 text-sm font-bold text-dark inline-block">
                         🪑 Ordering for Table {state.tableNumber}
                     </div>
                 )}
@@ -206,10 +206,10 @@ export default function Checkout({ onBack }: CheckoutProps) {
             <div className="flex-1 px-6 py-6 overflow-y-auto">
                 {cartItems.length === 0 ? (
                     <div className="text-center py-12">
-                        <p className="text-gray-500 mb-4">Your cart is empty.</p>
+                        <p className="text-highlight mb-4 text-lg font-medium">Your cart is empty.</p>
                         <button
                             onClick={onBack}
-                            className="text-black underline font-medium"
+                            className="text-dark underline font-bold hover:text-primary transition-colors"
                         >
                             Browse Menu
                         </button>
@@ -219,13 +219,13 @@ export default function Checkout({ onBack }: CheckoutProps) {
                         {cartItems.map((item, index) => (
                             <div
                                 key={`${item.id}-${index}`}
-                                className="bg-white p-4 rounded-xl shadow-sm flex justify-between items-center"
+                                className="bg-white p-5 rounded-xl shadow-soft flex justify-between items-center border border-transparent hover:border-primary/10 transition-colors"
                             >
                                 <div>
-                                    <h3 className="font-semibold text-lg">{item.name}</h3>
+                                    <h3 className="font-heading font-bold text-lg text-dark">{item.name}</h3>
                                 </div>
                                 <div className="flex items-center gap-3">
-                                    <span className="font-medium">{item.price}</span>
+                                    <span className="font-medium text-highlight font-body">{item.price}</span>
                                     <button
                                         onClick={() => dispatch({ type: "REMOVE_FROM_CART", payload: item.id })}
                                         className="text-gray-400 hover:text-red-500 transition-colors p-1"
@@ -245,24 +245,24 @@ export default function Checkout({ onBack }: CheckoutProps) {
             </div>
 
             {cartItems.length > 0 && (
-                <div className="bg-white px-6 py-8 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                <div className="bg-white px-6 py-8 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl relative z-20">
 
                     {/* Optional Addition - Calm Upsell */}
                     {showUpsell && upsellData && (
-                        <div className="mb-6 bg-stone-50 border border-stone-200 rounded-xl p-4">
-                            <div className="flex justify-between items-start mb-1">
-                                <h3 className="font-medium text-gray-700">You might also enjoy</h3>
+                        <div className="mb-8 bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in shadow-[0_0_15px_rgba(244,196,48,0.15)]">
+                            <div className="flex justify-between items-start mb-2">
+                                <h3 className="font-heading font-bold text-dark text-lg">You might also enjoy</h3>
                             </div>
-                            <p className="text-sm text-gray-500 mb-3">{upsellData.reason}</p>
+                            <p className="text-sm text-dark/80 mb-4 font-body leading-relaxed">{upsellData.reason}</p>
 
-                            <div className="flex items-center justify-between bg-white p-3 rounded-lg border border-stone-200 mb-3">
+                            <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-primary/10 mb-4 shadow-sm">
                                 <div>
-                                    <p className="font-medium text-gray-800">{upsellData.item.name}</p>
-                                    <p className="text-sm text-gray-500">{upsellData.item.price}</p>
+                                    <p className="font-heading font-bold text-dark">{upsellData.item.name}</p>
+                                    <p className="text-sm text-highlight font-bold">{upsellData.item.price}</p>
                                 </div>
                                 <button
                                     onClick={handleAddUpsell}
-                                    className="bg-stone-100 hover:bg-stone-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                                    className="bg-primary/10 hover:bg-primary/20 text-dark border border-primary/20 px-4 py-2 rounded-lg text-sm font-bold transition-colors"
                                 >
                                     Add
                                 </button>
@@ -270,23 +270,23 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
                             <button
                                 onClick={handleDismissUpsell}
-                                className="w-full text-center text-xs text-gray-400 hover:text-gray-500 transition-colors"
+                                className="w-full text-center text-xs text-gray-400 hover:text-dark transition-colors font-medium uppercase tracking-wide"
                             >
                                 No thanks, just my order
                             </button>
                         </div>
                     )}
 
-                    <div className="space-y-2 mb-6 text-sm text-gray-600">
+                    <div className="space-y-3 mb-8 text-sm text-dark/80 font-medium">
                         <div className="flex justify-between">
                             <span>Subtotal</span>
-                            <span>₹{subtotal.toFixed(2)}</span>
+                            <span className="font-bold">₹{subtotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between">
                             <span>Tax (5%)</span>
                             <span>₹{tax.toFixed(2)}</span>
                         </div>
-                        <div className="flex justify-between text-lg font-bold text-black border-t pt-2 mt-2">
+                        <div className="flex justify-between text-2xl font-heading font-bold text-dark border-t border-dashed border-gray-200 pt-4 mt-4">
                             <span>Total</span>
                             <span>₹{total.toFixed(2)}</span>
                         </div>
@@ -295,9 +295,9 @@ export default function Checkout({ onBack }: CheckoutProps) {
                     <button
                         onClick={handlePlaceOrder}
                         disabled={isSubmitting}
-                        className={`w-full py-5 rounded-2xl text-xl font-bold shadow-lg transition-all ${isSubmitting
-                                ? "bg-gray-400 cursor-not-allowed"
-                                : "bg-gray-900 hover:bg-black hover:shadow-xl text-white"
+                        className={`w-full py-5 rounded-xl text-xl font-bold shadow-xl transition-all ${isSubmitting
+                            ? "bg-gray-300 cursor-not-allowed text-gray-500"
+                            : "bg-dark hover:bg-[#2c2323] hover:shadow-2xl text-white hover:-translate-y-0.5"
                             }`}
                     >
                         {isSubmitting ? "Processing..." : "Place Order"}

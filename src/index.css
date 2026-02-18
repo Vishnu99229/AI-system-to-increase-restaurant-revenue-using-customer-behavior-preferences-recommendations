@@ -1,3 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Trirong:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --font-heading: 'Trirong', serif;
+  --font-body: 'Inter', sans-serif;
+
+  --color-bg: #FFF7E1;
+  --color-primary: #F4C430;
+  --color-dark: #3B2F2F;
+  --color-card: #FFFFFF;
+  --color-highlight: #8B5E3C;
+}
+
+body {
+  background-color: var(--color-bg);
+  font-family: var(--font-body);
+  color: var(--color-dark);
+}
