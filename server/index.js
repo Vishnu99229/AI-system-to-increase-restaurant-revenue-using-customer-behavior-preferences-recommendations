@@ -18,16 +18,21 @@ const twilio = require("twilio");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- Middleware ---
+// --- CORS Configuration ---
+const corsOptions = {
+    origin: [
+        "https://qr.goschedule.ai",
+        "https://qr-menu-upsell.vercel.app",
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+};
+
+// --- Middleware (CORS must be first) ---
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // Explicit preflight handling
 app.use(express.json());
-app.use(
-    cors({
-        origin: [
-            "http://localhost:5173",
-            "https://qr-menu-upsell.vercel.app",
-        ],
-    })
-);
 
 // --- Health Check ---
 app.get("/", (req, res) => {
