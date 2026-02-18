@@ -64,6 +64,8 @@ const TWILIO_TO = process.env.RESTAURANT_WHATSAPP_NUMBER
 if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
     twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     console.log("[Twilio] Client initialized for WhatsApp notifications.");
+    console.log("[Twilio] FROM:", TWILIO_FROM || "NOT SET");
+    console.log("[Twilio] TO:", TWILIO_TO || "NOT SET");
 } else {
     console.warn("[Twilio] Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN — WhatsApp notifications disabled.");
 }
@@ -92,7 +94,8 @@ let analytics = {
  */
 async function sendOrderWhatsApp({ orderId, totalValue, upsellAccepted, upsellValue, items, restaurantId, tableNumber }) {
     if (!twilioClient || !TWILIO_FROM || !TWILIO_TO) {
-        return; // Silently skip if Twilio is not configured
+        console.warn(`[Twilio] SKIPPED for order ${orderId} — twilioClient: ${!!twilioClient}, FROM: ${TWILIO_FROM}, TO: ${TWILIO_TO}`);
+        return;
     }
 
     const now = new Date();
@@ -140,15 +143,22 @@ async function sendOrderWhatsApp({ orderId, totalValue, upsellAccepted, upsellVa
         `Time: ${timeStr}`,
     ].join("\n");
 
+    console.log(`[Twilio] Sending WhatsApp for order ${orderId}...`);
+    console.log(`[Twilio] FROM: ${TWILIO_FROM}, TO: ${TWILIO_TO}`);
+
     try {
-        await twilioClient.messages.create({
+        const result = await twilioClient.messages.create({
             from: TWILIO_FROM,
             to: TWILIO_TO,
             body: message,
         });
-        console.log(`[Twilio] WhatsApp sent for order ${orderId}`);
+        console.log(`[Twilio] ✅ WhatsApp sent for order ${orderId}`);
+        console.log(`[Twilio] SID: ${result.sid}, Status: ${result.status}`);
     } catch (err) {
-        console.error(`[Twilio] WhatsApp failed for order ${orderId}:`, err.message);
+        console.error(`[Twilio] ❌ WhatsApp FAILED for order ${orderId}`);
+        console.error(`[Twilio] Error: ${err.message}`);
+        console.error(`[Twilio] Code: ${err.code}, Status: ${err.status}`);
+        console.error(`[Twilio] More Info: ${err.moreInfo || "N/A"}`);
         // Never throw — order flow must not be affected
     }
 }
