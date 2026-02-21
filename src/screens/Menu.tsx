@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { getRecommendations, MENU_ITEMS } from "../utils/recommendations";
-import { rephraseReason, trackUpsellShown } from "../utils/api";
-import type { Item, Recommendation } from "../utils/recommendations";
+import { MENU_ITEMS } from "../utils/recommendations";
+import { trackUpsellShown } from "../utils/api";
+import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 
 interface MenuProps {
@@ -16,8 +16,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const { state, dispatch } = useApp();
 
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
-    const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
-    const [loadingRec, setLoadingRec] = useState(false);
+    const [quantity, setQuantity] = useState(1);
     const [showAddedToast, setShowAddedToast] = useState(false);
 
     // Guard: fires once per modal open, resets when modal closes
@@ -25,59 +24,39 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     // Fire trackUpsellShown() when a menu-level recommendation becomes visible
     useEffect(() => {
-        if (recommendation && !loadingRec && !hasTrackedCurrentModal.current) {
+        if (selectedItem?.recommendation && !hasTrackedCurrentModal.current) {
             hasTrackedCurrentModal.current = true;
             trackUpsellShown();
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
-    }, [recommendation, loadingRec, dispatch]);
+    }, [selectedItem, dispatch]);
 
-    const handleItemClick = async (item: Item) => {
+    const handleItemClick = (item: Item) => {
         setSelectedItem(item);
+        setQuantity(1);
         dispatch({ type: "ADD_VIEWED_ITEM", payload: item });
-        setLoadingRec(true);
-        setRecommendation(null);
-
-        try {
-            const rec = await getRecommendations(item, items);
-            setRecommendation(rec);
-
-            // Async rephrase - non-blocking
-            if (rec) {
-                rephraseReason(item.name, rec.item.name, rec.reason).then(newReason => {
-                    if (newReason) {
-                        setRecommendation(prev => {
-                            // Only update if we are still looking at the same recommendation
-                            if (prev && prev.item.id === rec.item.id) {
-                                return { ...prev, reason: newReason };
-                            }
-                            return prev;
-                        });
-                    }
-                });
-            }
-        } catch (error) {
-            console.error("Failed to load recommendation", error);
-        } finally {
-            setLoadingRec(false);
-        }
     };
 
     const closeDetail = () => {
         setSelectedItem(null);
-        setRecommendation(null);
         hasTrackedCurrentModal.current = false; // Reset for next modal open
     };
 
-    const handleAddToOrder = (itemsToAdd: Item[]) => {
-        itemsToAdd.forEach(item => dispatch({ type: "ADD_TO_CART", payload: item }));
+    const handleAddToOrder = (item: Item) => {
+        for (let i = 0; i < quantity; i++) {
+            dispatch({ type: "ADD_TO_CART", payload: item });
+        }
         setShowAddedToast(true);
         setTimeout(() => setShowAddedToast(false), 2000);
         closeDetail();
     };
 
-    const handleAddBothToOrder = (mainItem: Item, recommendedItem: Item) => {
+    const handleAddBothToOrder = (mainItem: Item, recData: { name: string, price: string }) => {
         // Mark that a recommendation was accepted before checkout (legacy + per-item)
+        const recommendedItem = items.find(i => i.name === recData.name) || {
+            id: Date.now(), name: recData.name, price: recData.price, popular: false, category: 'Bakery'
+        } as Item;
+
         dispatch({ type: "MARK_RECOMMENDATION_ACCEPTED_BEFORE_CHECKOUT" });
         // Mark BOTH items as pairing-accepted so neither triggers checkout upsell
         dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: mainItem.id });
@@ -85,12 +64,17 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         // Store only the recommended item's price for analytics (not the cart total)
         const recPrice = parseFloat(recommendedItem.price.replace(/[^0-9.]/g, "")) || 0;
         dispatch({ type: "SET_MENU_UPSELL_ITEM_PRICE", payload: recPrice });
-        dispatch({ type: "ADD_TO_CART", payload: mainItem });
-        dispatch({ type: "ADD_TO_CART", payload: recommendedItem });
+
+        for (let i = 0; i < quantity; i++) {
+            dispatch({ type: "ADD_TO_CART", payload: mainItem });
+            dispatch({ type: "ADD_TO_CART", payload: recommendedItem });
+        }
         setShowAddedToast(true);
         setTimeout(() => setShowAddedToast(false), 2000);
         closeDetail();
     };
+
+    const getPriceValue = (priceStr: string) => parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
 
     return (
         <div className="min-h-screen bg-warm-bg pb-24 relative">
@@ -148,6 +132,11 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                             </span>
                                         )}
                                         <h3 className="font-heading font-bold text-lg text-dark leading-tight">{item.name}</h3>
+                                        {item.description && (
+                                            <p className="text-gray-500 font-body text-sm mt-1 mb-2 leading-relaxed">
+                                                {item.description}
+                                            </p>
+                                        )}
                                         <p className="text-highlight font-medium mt-1 font-body">{item.price}</p>
                                     </div>
                                     <div className="w-24 h-24 bg-gray-100 rounded-xl ml-0 shrink-0 object-cover flex items-center justify-center text-gray-300">
@@ -179,47 +168,68 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
 
-                        <div className="mb-8 mt-2">
+                        <div className="mb-6 mt-2">
                             <h2 className="text-3xl font-heading font-bold mb-2 text-dark">{selectedItem.name}</h2>
-                            <p className="text-xl text-highlight font-medium">{selectedItem.price}</p>
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                <div className="flex items-center gap-2">
+                                    {selectedItem.discountedPrice ? (
+                                        <>
+                                            <p className="text-lg text-gray-400 font-medium line-through opacity-50">{selectedItem.originalPrice}</p>
+                                            <p className="text-xl font-bold text-[#E65C00]">{selectedItem.discountedPrice}</p>
+                                        </>
+                                    ) : (
+                                        <p className="text-xl text-highlight font-medium">{selectedItem.price}</p>
+                                    )}
+                                </div>
+                                <div className="ml-auto flex items-center bg-white border border-gray-200 rounded-full shadow-sm p-1">
+                                    <button
+                                        onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                                        className="w-8 h-8 rounded-full flex items-center justify-center text-dark hover:bg-gray-100 transition-colors"
+                                    >
+                                        -
+                                    </button>
+                                    <span className="w-8 text-center font-bold text-dark">{quantity}</span>
+                                    <button
+                                        onClick={() => setQuantity(quantity + 1)}
+                                        className="w-8 h-8 rounded-full flex items-center justify-center text-dark hover:bg-gray-100 transition-colors"
+                                    >
+                                        +
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="mt-3 text-lg font-bold text-dark">
+                                Total: ₹{((selectedItem.discountedPrice ? getPriceValue(selectedItem.discountedPrice) : getPriceValue(selectedItem.price)) * quantity).toFixed(2).replace(/\.00$/, '')}
+                            </div>
                         </div>
 
                         {/* Recommendation Section */}
-                        <div className="border-t border-dashed border-gray-200 pt-6">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
-                                Chef's Recommendation for You
-                            </h3>
-
-                            {loadingRec ? (
-                                <div className="flex items-center space-x-3 text-highlight animate-pulse bg-primary/5 p-4 rounded-xl">
-                                    <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
-                                    <span className="font-medium text-sm">Finding best pairing...</span>
-                                </div>
-                            ) : recommendation ? (
+                        {selectedItem.recommendation && (
+                            <div className="border-t border-dashed border-gray-200 pt-6">
+                                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
+                                    CHEF’S RECOMMENDATION FOR YOU
+                                </h3>
                                 <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
                                     <div className="flex items-start justify-between mb-2">
-                                        <h4 className="font-heading font-bold text-dark text-lg">{recommendation.item.name}</h4>
-                                        <span className="text-sm font-bold text-highlight">{recommendation.item.price}</span>
+                                        <h4 className="font-heading font-bold text-dark text-lg">{selectedItem.recommendation.name}</h4>
+                                        <span className="text-sm font-bold text-highlight">{selectedItem.recommendation.price}</span>
                                     </div>
                                     <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
-                                        "{recommendation.reason}"
+                                        "{selectedItem.recommendation.description}"
                                     </p>
                                     <button
-                                        onClick={() => handleAddBothToOrder(selectedItem, recommendation.item)}
-                                        className="w-full py-3 bg-white border border-primary/30 hover:bg-primary/10 text-dark rounded-xl font-bold text-sm transition-colors shadow-sm"
+                                        onClick={() => handleAddBothToOrder(selectedItem, selectedItem.recommendation!)}
+                                        className="w-full py-3 bg-[#E65C00] hover:bg-[#CC5200] text-white rounded-xl font-bold text-sm transition-all duration-200 shadow-md hover:shadow-lg"
                                     >
                                         Add Both to Order
                                     </button>
                                 </div>
-                            ) : (
-                                <p className="text-sm text-gray-400 italic">No specific pairings found.</p>
-                            )}
-                        </div>
+                            </div>
+                        )}
 
                         <div className="mt-8 space-y-3">
                             <button
-                                onClick={() => handleAddToOrder([selectedItem])}
-                                className="w-full py-4 bg-dark hover:bg-[#2c2323] text-white rounded-xl font-bold text-lg shadow-xl hover:shadow-2xl hover:-translate-y-0.5 transition-all"
+                                onClick={() => handleAddToOrder(selectedItem)}
+                                className="w-full py-4 bg-[#E65C00] hover:bg-[#CC5200] text-white rounded-xl font-bold text-lg shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
                             >
                                 Add to Order
                             </button>
