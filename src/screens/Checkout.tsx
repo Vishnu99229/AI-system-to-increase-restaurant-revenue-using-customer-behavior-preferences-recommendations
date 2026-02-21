@@ -3,6 +3,7 @@ import { useApp } from "../contexts/AppContext";
 import { getCheckoutUpsellCandidates, rankCandidatesAI } from "../utils/recommendations";
 import { rephraseReason, trackUpsellShown, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
+import { Button } from "../components/Button";
 
 interface CheckoutProps {
     onBack: () => void;
@@ -292,16 +293,14 @@ export default function Checkout({ onBack }: CheckoutProps) {
                         </div>
                     </div>
 
-                    <button
+                    <Button
                         onClick={handlePlaceOrder}
                         disabled={isSubmitting}
-                        className={`w-full py-5 rounded-xl text-xl font-bold shadow-xl transition-all ${isSubmitting
-                            ? "bg-gray-300 cursor-not-allowed text-gray-500"
-                            : "bg-dark hover:bg-[#2c2323] hover:shadow-2xl text-white hover:-translate-y-0.5"
-                            }`}
+                        variant="primary"
+                        fullWidth
                     >
                         {isSubmitting ? "Processing..." : "Place Order"}
-                    </button>
+                    </Button>
                 </div>
             )}
         </div>

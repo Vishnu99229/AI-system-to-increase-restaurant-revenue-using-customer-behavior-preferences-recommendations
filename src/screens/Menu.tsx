@@ -3,6 +3,7 @@ import { MENU_ITEMS } from "../utils/recommendations";
 import { trackUpsellShown } from "../utils/api";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
+import { Button } from "../components/Button";
 
 interface MenuProps {
     onBack: () => void;
@@ -216,23 +217,25 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                     <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
                                         "{selectedItem.recommendation.description}"
                                     </p>
-                                    <button
+                                    <Button
                                         onClick={() => handleAddBothToOrder(selectedItem, selectedItem.recommendation!)}
-                                        className="w-full py-3 bg-[#E65C00] hover:bg-[#CC5200] text-white rounded-xl font-bold text-sm transition-all duration-200 shadow-md hover:shadow-lg"
+                                        variant="primary"
+                                        fullWidth
                                     >
                                         Add Both to Order
-                                    </button>
+                                    </Button>
                                 </div>
                             </div>
                         )}
 
                         <div className="mt-8 space-y-3">
-                            <button
+                            <Button
                                 onClick={() => handleAddToOrder(selectedItem)}
-                                className="w-full py-4 bg-[#E65C00] hover:bg-[#CC5200] text-white rounded-xl font-bold text-lg shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
+                                variant="secondary"
+                                fullWidth
                             >
                                 Add to Order
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </div>
