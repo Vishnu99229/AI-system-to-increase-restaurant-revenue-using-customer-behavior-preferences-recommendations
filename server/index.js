@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 3001;
 // --- CORS Configuration (manual middleware for Express 5 reliability) ---
 const ALLOWED_ORIGINS = [
     "https://orlena.talk",
-    "https://qr.goschedule.ai",
+    "https://api.orlena.talk",
     "https://qr-menu-upsell.vercel.app",
 ];
 
