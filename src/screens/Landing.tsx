@@ -7,19 +7,26 @@ interface LandingProps {
 
 export default function Landing({ onViewMenu }: LandingProps) {
     const { state, dispatch } = useApp();
-    const [inputValue, setInputValue] = useState("");
+    const [nameValue, setNameValue] = useState("");
+    const [phoneValue, setPhoneValue] = useState("");
 
     useEffect(() => {
-        // Initialize input with stored name if available
-        if (state.userName) {
-            setInputValue(state.userName);
-        }
-    }, [state.userName]);
+        // Hydrate inputs from context for returning users
+        if (state.customerName) setNameValue(state.customerName);
+        if (state.customerPhone) setPhoneValue(state.customerPhone);
+        // Also keep legacy userName in sync
+        if (state.userName && !state.customerName) setNameValue(state.userName);
+    }, [state.customerName, state.customerPhone, state.userName]);
+
+    const phoneDigits = phoneValue.replace(/\D/g, "");
+    const isValid = nameValue.trim().length > 0 && phoneDigits.length >= 10;
 
     const handleViewMenu = () => {
-        if (inputValue.trim()) {
-            dispatch({ type: "SET_USER_NAME", payload: inputValue.trim() });
-        }
+        if (!isValid) return;
+        dispatch({ type: "SET_CUSTOMER_NAME", payload: nameValue.trim() });
+        dispatch({ type: "SET_CUSTOMER_PHONE", payload: phoneValue.trim() });
+        // Keep legacy userName in sync
+        dispatch({ type: "SET_USER_NAME", payload: nameValue.trim() });
         onViewMenu();
     };
 
@@ -34,17 +41,38 @@ export default function Landing({ onViewMenu }: LandingProps) {
             </p>
 
             <div className="space-y-5">
-                <input
-                    type="text"
-                    placeholder="Enter your name (optional)"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    className="w-full px-4 py-3 rounded-lg border border-primary/30 bg-white text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-base"
-                />
+                <div>
+                    <label className="block text-sm font-medium text-dark/70 mb-1">Your Name *</label>
+                    <input
+                        type="text"
+                        placeholder="e.g. Rahul"
+                        value={nameValue}
+                        onChange={(e) => setNameValue(e.target.value)}
+                        className="w-full px-4 py-3 rounded-lg border border-primary/30 bg-white text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-base"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-dark/70 mb-1">Phone Number *</label>
+                    <input
+                        type="tel"
+                        placeholder="e.g. 9876543210"
+                        value={phoneValue}
+                        onChange={(e) => setPhoneValue(e.target.value)}
+                        className="w-full px-4 py-3 rounded-lg border border-primary/30 bg-white text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-base"
+                    />
+                    {phoneValue.length > 0 && phoneDigits.length < 10 && (
+                        <p className="text-xs text-red-500 mt-1">Phone must be at least 10 digits</p>
+                    )}
+                </div>
 
                 <button
                     onClick={handleViewMenu}
-                    className="w-full bg-dark hover:bg-[#2c2323] text-white py-4 rounded-xl text-lg font-bold tracking-wide shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all"
+                    disabled={!isValid}
+                    className={`w-full py-4 rounded-xl text-lg font-bold tracking-wide shadow-lg transition-all ${isValid
+                            ? "bg-dark hover:bg-[#2c2323] text-white hover:shadow-xl hover:-translate-y-0.5"
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                        }`}
                 >
                     Let's Start →
                 </button>

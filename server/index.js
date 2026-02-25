@@ -13,6 +13,30 @@ console.log("Loaded API Key:", process.env.OPENAI_API_KEY.substring(0, 15) + "..
 const express = require("express");
 const OpenAI = require("openai");
 const twilio = require("twilio");
+const { Pool } = require("pg");
+
+// --- PostgreSQL Pool ---
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false,
+    },
+});
+
+// --- DB Startup: Health Check + Migrations ---
+(async () => {
+    try {
+        const test = await pool.query("SELECT NOW()");
+        console.log("✅ DB Connected:", test.rows[0]);
+
+        // Idempotent schema migrations
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255)`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(20)`);
+        console.log("✅ DB Migrations applied (customer_name, customer_phone)");
+    } catch (err) {
+        console.error("❌ DB Startup Failed:", err);
+    }
+})();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -189,49 +213,107 @@ app.post("/api/upsell-shown", (req, res) => {
 });
 
 /**
- * POST /api/order-complete
- * Tracks a completed order.
- * Input: { orderId, totalValue, upsellAccepted, upsellValue }
+ * POST /api/:slug/order-complete
+ * Multi-tenant: looks up restaurant by slug, inserts order into PostgreSQL.
+ * Input: { items, subtotal, tax, total, pairing_accepted, customer_name, customer_phone,
+ *          orderId, totalValue, upsellAccepted, upsellValue, tableNumber }
  */
-app.post("/api/order-complete", (req, res) => {
-    const { orderId, totalValue, upsellAccepted, upsellValue } = req.body;
+app.post("/api/:slug/order-complete", async (req, res) => {
+    try {
+        const slug = req.params.slug;
+        console.log("Incoming order payload:", req.body);
+        console.log("Restaurant slug:", slug);
 
-    if (!orderId || totalValue === undefined || upsellAccepted === undefined) {
-        return res.status(400).json({ error: "Missing required fields" });
+        // --- Look up restaurant by slug ---
+        const restaurantResult = await pool.query(
+            "SELECT id FROM restaurants WHERE domain = $1",
+            [slug]
+        );
+
+        if (restaurantResult.rows.length === 0) {
+            return res.status(404).json({ success: false, error: "Restaurant not found" });
+        }
+
+        const restaurant_id = restaurantResult.rows[0].id;
+
+        const {
+            items, subtotal, tax, total, pairing_accepted,
+            customer_name, customer_phone,
+            orderId, totalValue, upsellAccepted, upsellValue,
+        } = req.body;
+
+        // --- Validate customer info ---
+        if (!customer_name || !customer_phone) {
+            return res.status(400).json({ success: false, error: "customer_name and customer_phone are required" });
+        }
+
+        // --- PostgreSQL Insert ---
+        const result = await pool.query(
+            `INSERT INTO orders
+             (restaurant_id, items, subtotal, tax, total, pairing_accepted, customer_name, customer_phone)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id`,
+            [
+                restaurant_id,
+                JSON.stringify(items),
+                subtotal,
+                tax,
+                total,
+                pairing_accepted,
+                customer_name,
+                customer_phone,
+            ]
+        );
+
+        const insertedId = result.rows[0].id;
+        console.log("Inserted order ID:", insertedId);
+
+        // --- Temporary Verification Query (remove after verification) ---
+        const verify = await pool.query(
+            "SELECT * FROM orders WHERE id = $1",
+            [insertedId]
+        );
+        console.log("Verification row:", verify.rows[0]);
+
+        // --- In-Memory Analytics (preserved) ---
+        const effectiveOrderId = orderId || insertedId;
+        const effectiveTotalValue = totalValue !== undefined ? parseFloat(totalValue) : parseFloat(total) || 0;
+        let validatedUpsellValue = parseFloat(upsellValue) || 0;
+        if (!upsellAccepted) {
+            validatedUpsellValue = 0;
+        }
+
+        analytics.orders.push({
+            orderId: effectiveOrderId,
+            totalValue: effectiveTotalValue,
+            upsellAccepted: !!upsellAccepted,
+            upsellValue: validatedUpsellValue,
+            timestamp: new Date(),
+        });
+
+        if (upsellAccepted) {
+            analytics.upsellAccepted++;
+        }
+
+        console.log(`[Analytics] Order logged: $${effectiveTotalValue} (Upsell: ${upsellAccepted}, Value: $${validatedUpsellValue})`);
+
+        // Fire-and-forget WhatsApp notification — never blocks response
+        sendOrderWhatsApp({
+            orderId: effectiveOrderId,
+            totalValue: effectiveTotalValue,
+            upsellAccepted: !!upsellAccepted,
+            upsellValue: validatedUpsellValue,
+            items: req.body.items || [],
+            restaurantId: slug,
+            tableNumber: req.body.tableNumber || "",
+        });
+
+        res.json({ success: true, orderId: insertedId });
+
+    } catch (error) {
+        console.error("Order insert failed:", error);
+        res.status(500).json({ success: false });
     }
-
-    // Validation: upsellValue must be 0 if upsellAccepted is false
-    let validatedUpsellValue = parseFloat(upsellValue) || 0;
-    if (!upsellAccepted) {
-        validatedUpsellValue = 0;
-    }
-
-    analytics.orders.push({
-        orderId,
-        totalValue: parseFloat(totalValue),
-        upsellAccepted: !!upsellAccepted,
-        upsellValue: validatedUpsellValue,
-        timestamp: new Date(),
-    });
-
-    if (upsellAccepted) {
-        analytics.upsellAccepted++;
-    }
-
-    console.log(`[Analytics] Order logged: $${totalValue} (Upsell: ${upsellAccepted}, Value: $${validatedUpsellValue})`);
-
-    // Fire-and-forget WhatsApp notification — never blocks response
-    sendOrderWhatsApp({
-        orderId,
-        totalValue,
-        upsellAccepted: !!upsellAccepted,
-        upsellValue: validatedUpsellValue,
-        items: req.body.items || [],
-        restaurantId: req.body.restaurantId || "",
-        tableNumber: req.body.tableNumber || "",
-    });
-
-    res.status(200).send("OK");
 });
 
 /**

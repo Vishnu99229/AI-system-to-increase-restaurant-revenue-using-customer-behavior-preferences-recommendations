@@ -25,6 +25,8 @@ import type { Item } from "../utils/recommendations";
  */
 export interface AppState {
     userName: string;
+    customerName: string;
+    customerPhone: string;
     restaurantId: string;
     tableNumber: string;
     cartItems: Item[];
@@ -49,6 +51,8 @@ export interface UpsellMetrics {
 
 const initialState: AppState = {
     userName: "",
+    customerName: "",
+    customerPhone: "",
     restaurantId: "",
     tableNumber: "",
     cartItems: [],
@@ -73,6 +77,8 @@ const initialState: AppState = {
 
 export type AppAction =
     | { type: "SET_USER_NAME"; payload: string }
+    | { type: "SET_CUSTOMER_NAME"; payload: string }
+    | { type: "SET_CUSTOMER_PHONE"; payload: string }
     | { type: "ADD_TO_CART"; payload: Item }
     | { type: "REMOVE_FROM_CART"; payload: number } // remove by ID
     | { type: "CLEAR_CART" }
@@ -93,6 +99,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
     switch (action.type) {
         case "SET_USER_NAME":
             return { ...state, userName: action.payload };
+        case "SET_CUSTOMER_NAME":
+            return { ...state, customerName: action.payload };
+        case "SET_CUSTOMER_PHONE":
+            return { ...state, customerPhone: action.payload };
         case "ADD_TO_CART":
             return {
                 ...state,
@@ -195,6 +205,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     ...defaultState,
                     ...parsed,
                     // Ensure new fields have defaults if missing from old storage
+                    customerName: parsed.customerName ?? "",
+                    customerPhone: parsed.customerPhone ?? "",
                     restaurantId: parsed.restaurantId ?? "",
                     tableNumber: parsed.tableNumber ?? "",
                     recommendationAcceptedBeforeCheckout: parsed.recommendationAcceptedBeforeCheckout ?? false,

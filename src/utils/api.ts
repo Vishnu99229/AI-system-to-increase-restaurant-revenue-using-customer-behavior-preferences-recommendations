@@ -58,19 +58,21 @@ export async function trackUpsellShown(): Promise<void> {
 }
 
 /**
- * Tracks when an order is completed.
+ * Submits a completed order to the slug-based endpoint.
  */
 export async function trackOrderComplete(
+    slug: string,
     orderId: string,
     totalValue: number,
     upsellAccepted: boolean,
     upsellValue: number = 0,
     items: { name: string; price: string }[] = [],
-    restaurantId: string = "",
-    tableNumber: string = ""
+    tableNumber: string = "",
+    customerName: string = "",
+    customerPhone: string = ""
 ): Promise<void> {
     try {
-        await fetch(`${API_BASE}/api/order-complete`, {
+        await fetch(`${API_BASE}/api/${slug}/order-complete`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -79,8 +81,13 @@ export async function trackOrderComplete(
                 upsellAccepted,
                 upsellValue,
                 items: items.map(i => ({ name: i.name, price: i.price })),
-                restaurantId,
+                subtotal: totalValue / 1.05, // approximate from total
+                tax: totalValue - totalValue / 1.05,
+                total: totalValue,
+                pairing_accepted: upsellAccepted,
                 tableNumber,
+                customer_name: customerName,
+                customer_phone: customerPhone,
             }),
         });
     } catch (error) {

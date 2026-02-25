@@ -155,15 +155,17 @@ export default function Checkout({ onBack }: CheckoutProps) {
             total: total.toFixed(2),
         });
 
-        // Fire-and-forget analytics
+        // Fire-and-forget analytics via slug-based endpoint
         trackOrderComplete(
+            state.restaurantId, // slug
             Date.now().toString(), // Simple ID generation
             total,
             upsellAccepted,
             upsellValue,
             cartItems.map(item => ({ name: item.name, price: item.price })),
-            state.restaurantId,
-            state.tableNumber
+            state.tableNumber,
+            state.customerName,
+            state.customerPhone
         );
 
         alert("Order placed! (Check console for details)");
