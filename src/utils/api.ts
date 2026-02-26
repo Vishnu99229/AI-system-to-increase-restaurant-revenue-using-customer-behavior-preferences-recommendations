@@ -1,3 +1,5 @@
+import type { Item } from "./recommendations";
+
 export interface RephraseRequest {
     baseItem: string;
     suggestedItem: string;
@@ -8,6 +10,32 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 export interface RephraseResponse {
     reason: string;
+}
+
+/**
+ * Fetches menu items for a restaurant by slug.
+ * Returns an empty array on error.
+ */
+export async function fetchMenu(slug: string): Promise<Item[]> {
+    try {
+        const response = await fetch(`${API_BASE}/api/${slug}/menu`);
+        if (!response.ok) {
+            console.warn("Menu fetch failed with status:", response.status);
+            return [];
+        }
+        const rows = await response.json();
+        return rows.map((row: { id: number; name: string; description?: string; price: string | number; category?: string; image_url?: string }) => ({
+            id: row.id,
+            name: row.name,
+            description: row.description || "",
+            price: `₹${parseFloat(String(row.price)).toFixed(0)}`,
+            popular: false,
+            category: row.category || "Other",
+        }));
+    } catch (error) {
+        console.warn("Menu fetch network error:", error);
+        return [];
+    }
 }
 
 /**

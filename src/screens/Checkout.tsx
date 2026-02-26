@@ -76,7 +76,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
         // Only reach here if shouldShowCheckoutUpsell is true
         // Step 1: Deterministic confidence gate
-        const approvedCandidates = getCheckoutUpsellCandidates(cartItems, viewedItems);
+        const approvedCandidates = getCheckoutUpsellCandidates(cartItems, viewedItems, state.menuItems);
 
         if (approvedCandidates.length > 0) {
             console.log("[Dev] Upsell Decision: Render (Gates passed, candidates found)");

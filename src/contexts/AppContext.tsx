@@ -37,6 +37,7 @@ export interface AppState {
     pairingAcceptedByItemId: Record<number, boolean>;
     checkoutUpsellShownByItemId: Record<number, boolean>;
     menuUpsellItemPrice: number;
+    menuItems: Item[];
     upsellMetrics: UpsellMetrics;
 }
 
@@ -63,6 +64,7 @@ const initialState: AppState = {
     pairingAcceptedByItemId: {},
     checkoutUpsellShownByItemId: {},
     menuUpsellItemPrice: 0,
+    menuItems: [],
     upsellMetrics: {
         pairingShownCount: 0,
         pairingAcceptedCount: 0,
@@ -89,6 +91,7 @@ export type AppAction =
     | { type: "MARK_CHECKOUT_UPSELL_SHOWN_FOR_ITEM"; payload: number }
     | { type: "INCREMENT_UPSELL_METRIC"; payload: keyof UpsellMetrics }
     | { type: "SET_MENU_UPSELL_ITEM_PRICE"; payload: number }
+    | { type: "SET_MENU_ITEMS"; payload: Item[] }
     | { type: "SET_TABLE_INFO"; payload: { restaurantId: string; tableNumber: string } }
     | { type: "RESET_SESSION_AFTER_ORDER" }
     | { type: "LOGOUT" };
@@ -146,6 +149,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
             };
         case "SET_MENU_UPSELL_ITEM_PRICE":
             return { ...state, menuUpsellItemPrice: action.payload };
+        case "SET_MENU_ITEMS":
+            return { ...state, menuItems: action.payload };
         case "SET_TABLE_INFO":
             return {
                 ...state,
@@ -215,6 +220,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     pairingAcceptedByItemId: parsed.pairingAcceptedByItemId ?? {},
                     checkoutUpsellShownByItemId: parsed.checkoutUpsellShownByItemId ?? {},
                     menuUpsellItemPrice: parsed.menuUpsellItemPrice ?? 0,
+                    menuItems: parsed.menuItems ?? [],
                     upsellMetrics: parsed.upsellMetrics ?? {
                         pairingShownCount: 0,
                         pairingAcceptedCount: 0,

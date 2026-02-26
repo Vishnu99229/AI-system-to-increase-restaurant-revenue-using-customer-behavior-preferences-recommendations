@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { MENU_ITEMS } from "../utils/recommendations";
-import { trackUpsellShown } from "../utils/api";
+import { getDeterministicUpsell } from "../utils/recommendations";
+import { fetchMenu, trackUpsellShown } from "../utils/api";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 import { Button } from "../components/Button";
@@ -11,10 +11,10 @@ interface MenuProps {
 }
 
 export default function Menu({ onBack, onViewCart }: MenuProps) {
-    // Use the central MENU_ITEMS
-    const [items] = useState<Item[]>(MENU_ITEMS);
-
     const { state, dispatch } = useApp();
+
+    const [items, setItems] = useState<Item[]>(state.menuItems);
+    const [loading, setLoading] = useState(state.menuItems.length === 0);
 
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
@@ -23,14 +23,40 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     // Guard: fires once per modal open, resets when modal closes
     const hasTrackedCurrentModal = useRef(false);
 
+    // Fetch menu on mount if not already loaded
+    useEffect(() => {
+        if (state.menuItems.length > 0) {
+            setItems(state.menuItems);
+            setLoading(false);
+            return;
+        }
+
+        const slug = state.restaurantId;
+        if (!slug) {
+            setLoading(false);
+            return;
+        }
+
+        fetchMenu(slug).then(menuItems => {
+            setItems(menuItems);
+            dispatch({ type: "SET_MENU_ITEMS", payload: menuItems });
+            setLoading(false);
+        });
+    }, [state.restaurantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Compute recommendation dynamically for the selected item
+    const computedRecommendation = selectedItem
+        ? getDeterministicUpsell(selectedItem, state.cartItems, items)
+        : null;
+
     // Fire trackUpsellShown() when a menu-level recommendation becomes visible
     useEffect(() => {
-        if (selectedItem?.recommendation && !hasTrackedCurrentModal.current) {
+        if (computedRecommendation && selectedItem && !hasTrackedCurrentModal.current) {
             hasTrackedCurrentModal.current = true;
             trackUpsellShown();
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
-    }, [selectedItem, dispatch]);
+    }, [selectedItem, computedRecommendation, dispatch]);
 
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);
@@ -52,23 +78,18 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         closeDetail();
     };
 
-    const handleAddBothToOrder = (mainItem: Item, recData: { name: string, price: string }) => {
-        // Mark that a recommendation was accepted before checkout (legacy + per-item)
-        const recommendedItem = items.find(i => i.name === recData.name) || {
-            id: Date.now(), name: recData.name, price: recData.price, popular: false, category: 'Bakery'
-        } as Item;
-
+    const handleAddBothToOrder = (mainItem: Item, recItem: Item) => {
         dispatch({ type: "MARK_RECOMMENDATION_ACCEPTED_BEFORE_CHECKOUT" });
         // Mark BOTH items as pairing-accepted so neither triggers checkout upsell
         dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: mainItem.id });
-        dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: recommendedItem.id });
+        dispatch({ type: "MARK_PAIRING_ACCEPTED_FOR_ITEM", payload: recItem.id });
         // Store only the recommended item's price for analytics (not the cart total)
-        const recPrice = parseFloat(recommendedItem.price.replace(/[^0-9.]/g, "")) || 0;
+        const recPrice = parseFloat(recItem.price.replace(/[^0-9.]/g, "")) || 0;
         dispatch({ type: "SET_MENU_UPSELL_ITEM_PRICE", payload: recPrice });
 
         for (let i = 0; i < quantity; i++) {
             dispatch({ type: "ADD_TO_CART", payload: mainItem });
-            dispatch({ type: "ADD_TO_CART", payload: recommendedItem });
+            dispatch({ type: "ADD_TO_CART", payload: recItem });
         }
         setShowAddedToast(true);
         setTimeout(() => setShowAddedToast(false), 2000);
@@ -76,6 +97,14 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     const getPriceValue = (priceStr: string) => parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-warm-bg flex items-center justify-center">
+                <p className="text-highlight text-lg font-medium">Loading menu...</p>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-warm-bg pb-24 relative">
@@ -113,42 +142,48 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             </div>
 
             <div className="px-6 py-4 space-y-10">
-                {/* Group items by category, preserving insertion order */}
-                {Array.from(new Set(items.map(i => i.category))).map(category => (
-                    <section key={category}>
-                        <h2 className="text-xl font-heading font-bold text-dark border-b-2 border-primary/20 pb-2 mb-6 inline-block">
-                            {category}
-                        </h2>
-                        <div className="space-y-5">
-                            {items.filter(item => item.category === category).map((item) => (
-                                <div
-                                    key={item.id}
-                                    onClick={() => handleItemClick(item)}
-                                    className="bg-white p-5 rounded-2xl shadow-soft border border-transparent hover:border-primary/20 flex items-center justify-between cursor-pointer active:scale-95 hover:-translate-y-1 transition-all duration-300"
-                                >
-                                    <div className="flex-1 pr-4">
-                                        {item.popular && (
-                                            <span className="inline-block bg-primary/20 text-dark text-xs font-bold px-2 py-1 rounded-md mb-2 uppercase tracking-wide">
-                                                Popular
-                                            </span>
-                                        )}
-                                        <h3 className="font-heading font-bold text-lg text-dark leading-tight">{item.name}</h3>
-                                        {item.description && (
-                                            <p className="text-gray-500 font-body text-sm mt-1 mb-2 leading-relaxed">
-                                                {item.description}
-                                            </p>
-                                        )}
-                                        <p className="text-highlight font-medium mt-1 font-body">{item.price}</p>
+                {items.length === 0 ? (
+                    <div className="text-center py-12">
+                        <p className="text-highlight text-lg font-medium">No menu items available yet.</p>
+                    </div>
+                ) : (
+                    /* Group items by category, preserving insertion order */
+                    Array.from(new Set(items.map(i => i.category))).map(category => (
+                        <section key={category}>
+                            <h2 className="text-xl font-heading font-bold text-dark border-b-2 border-primary/20 pb-2 mb-6 inline-block">
+                                {category}
+                            </h2>
+                            <div className="space-y-5">
+                                {items.filter(item => item.category === category).map((item) => (
+                                    <div
+                                        key={item.id}
+                                        onClick={() => handleItemClick(item)}
+                                        className="bg-white p-5 rounded-2xl shadow-soft border border-transparent hover:border-primary/20 flex items-center justify-between cursor-pointer active:scale-95 hover:-translate-y-1 transition-all duration-300"
+                                    >
+                                        <div className="flex-1 pr-4">
+                                            {item.popular && (
+                                                <span className="inline-block bg-primary/20 text-dark text-xs font-bold px-2 py-1 rounded-md mb-2 uppercase tracking-wide">
+                                                    Popular
+                                                </span>
+                                            )}
+                                            <h3 className="font-heading font-bold text-lg text-dark leading-tight">{item.name}</h3>
+                                            {item.description && (
+                                                <p className="text-gray-500 font-body text-sm mt-1 mb-2 leading-relaxed">
+                                                    {item.description}
+                                                </p>
+                                            )}
+                                            <p className="text-highlight font-medium mt-1 font-body">{item.price}</p>
+                                        </div>
+                                        <div className="w-24 h-24 bg-gray-100 rounded-xl ml-0 shrink-0 object-cover flex items-center justify-center text-gray-300">
+                                            {/* Placeholder for now */}
+                                            <svg className="w-8 h-8 opacity-20" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" /></svg>
+                                        </div>
                                     </div>
-                                    <div className="w-24 h-24 bg-gray-100 rounded-xl ml-0 shrink-0 object-cover flex items-center justify-center text-gray-300">
-                                        {/* Placeholder for now */}
-                                        <svg className="w-8 h-8 opacity-20" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" /></svg>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </section>
-                ))}
+                                ))}
+                            </div>
+                        </section>
+                    ))
+                )}
             </div>
 
             {/* Item Detail Modal */}
@@ -204,21 +239,21 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         </div>
 
                         {/* Recommendation Section */}
-                        {selectedItem.recommendation && (
+                        {computedRecommendation && (
                             <div className="border-t border-dashed border-gray-200 pt-6">
                                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
-                                    CHEF’S RECOMMENDATION FOR YOU
+                                    CHEF'S RECOMMENDATION FOR YOU
                                 </h3>
                                 <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
                                     <div className="flex items-start justify-between mb-2">
-                                        <h4 className="font-heading font-bold text-dark text-lg">{selectedItem.recommendation.name}</h4>
-                                        <span className="text-sm font-bold text-highlight">{selectedItem.recommendation.price}</span>
+                                        <h4 className="font-heading font-bold text-dark text-lg">{computedRecommendation.item.name}</h4>
+                                        <span className="text-sm font-bold text-highlight">{computedRecommendation.item.price}</span>
                                     </div>
                                     <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
-                                        "{selectedItem.recommendation.description}"
+                                        "{computedRecommendation.reason}"
                                     </p>
                                     <Button
-                                        onClick={() => handleAddBothToOrder(selectedItem, selectedItem.recommendation!)}
+                                        onClick={() => handleAddBothToOrder(selectedItem, computedRecommendation.item)}
                                         variant="primary"
                                         fullWidth
                                     >

@@ -16,11 +16,12 @@ const twilio = require("twilio");
 const { Pool } = require("pg");
 
 // --- PostgreSQL Pool ---
+console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false,
-    },
+    ssl: process.env.NODE_ENV === "production"
+        ? { rejectUnauthorized: false }
+        : false,
 });
 
 // --- DB Startup: Health Check + Migrations ---
@@ -32,7 +33,21 @@ const pool = new Pool({
         // Idempotent schema migrations
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255)`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(20)`);
-        console.log("✅ DB Migrations applied (customer_name, customer_phone)");
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS menus (
+                id SERIAL PRIMARY KEY,
+                restaurant_id INTEGER REFERENCES restaurants(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                description TEXT,
+                price NUMERIC(10,2) NOT NULL,
+                category VARCHAR(100),
+                image_url TEXT,
+                is_available BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log("✅ DB Migrations applied (customer_name, customer_phone, menus table)");
     } catch (err) {
         console.error("❌ DB Startup Failed:", err);
     }
@@ -200,6 +215,42 @@ app.get("/api/restaurant/:id", (req, res) => {
         return res.status(404).json({ error: "Restaurant not found" });
     }
     res.json({ name: config.name, maxTables: config.maxTables });
+});
+
+/**
+ * GET /api/:slug/menu
+ * Returns menu items for a restaurant identified by slug.
+ */
+app.get("/api/:slug/menu", async (req, res) => {
+    try {
+        const slug = req.params.slug;
+
+        // Look up restaurant by slug
+        const restaurantResult = await pool.query(
+            "SELECT id FROM restaurants WHERE domain = $1",
+            [slug]
+        );
+
+        if (restaurantResult.rows.length === 0) {
+            return res.status(404).json({ error: "Restaurant not found" });
+        }
+
+        const restaurant_id = restaurantResult.rows[0].id;
+
+        // Fetch available menu items
+        const menuResult = await pool.query(
+            `SELECT id, name, description, price, category, image_url
+             FROM menus
+             WHERE restaurant_id = $1 AND is_available = true
+             ORDER BY category, name`,
+            [restaurant_id]
+        );
+
+        res.json(menuResult.rows);
+    } catch (error) {
+        console.error("Menu fetch failed:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
 });
 
 /**
