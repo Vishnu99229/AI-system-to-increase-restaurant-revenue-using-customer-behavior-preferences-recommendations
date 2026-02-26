@@ -102,17 +102,11 @@ export function getDeterministicUpsell(
     cartItems: Item[] = [],
     allItems: Item[] = []
 ): Recommendation | null {
-    // [DEBUG] Log inputs
-    console.debug("[Upsell] Selected item:", baseItem.name, "| Category:", baseItem.category);
-    console.debug("[Upsell] All available items:", allItems.length);
-
     if (allItems.length <= 1) return null;
 
     const cartIds = new Set(cartItems.map(i => i.id));
     const allCategories = [...new Set(allItems.map(i => i.category))];
     const complementaryCategories = getComplementaryCategories(baseItem.category, allCategories);
-
-    console.debug("[Upsell] Complementary categories:", complementaryCategories);
 
     // Filter candidates: different item, not in cart, in a complementary category
     let candidates = allItems.filter(candidate => {
@@ -138,8 +132,6 @@ export function getDeterministicUpsell(
             candidate.id !== baseItem.id && !cartIds.has(candidate.id)
         );
     }
-
-    console.debug("[Upsell] Filtered candidates:", candidates.map(c => `${c.name} (${c.category})`));
 
     if (candidates.length === 0) return null;
 
