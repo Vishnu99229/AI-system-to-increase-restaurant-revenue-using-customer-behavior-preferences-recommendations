@@ -7,7 +7,7 @@ export interface Item {
     discountedPrice?: string;
     popular: boolean;
     category: string;
-    pairsWith?: string[]; // Legacy, kept for compatibility but not used in strict logic
+    pairsWith?: string[]; // Legacy, kept for compatibility
 }
 
 export interface Recommendation {
@@ -15,137 +15,178 @@ export interface Recommendation {
     reason: string;
 }
 
-// --- Deterministic Logic ---
+// --- Helpers ---
 
 const getPrice = (p: string) => parseFloat(p.replace(/[^0-9.]/g, "")) || 0;
 
-// Logic Categories
-type LogicCategory = 'Beverage' | 'Main' | 'Side' | 'Dessert';
+// --- Fully Data-Driven Category Pairing ---
 
-const CATEGORY_MAP: Record<string, LogicCategory> = {
-    'Hot Coffee': 'Beverage',
-    'Cold Coffee': 'Beverage',
-    'Non Coffee': 'Beverage',
-    'Savory': 'Main',
-    'Bakery': 'Side', // Bakery acts as Side/Dessert
-};
+/**
+ * Keyword-based complementary category matching.
+ * Keys are lowercase substrings matched against the item's category.
+ * Values are arrays of lowercase substrings that define complementary categories.
+ * This supports arbitrary restaurant menus without hardcoding specific category names.
+ */
+const COMPLEMENTARY_KEYWORDS: [string, string[]][] = [
+    // Mains → suggest drinks and sides
+    ['pizza', ['beverage', 'drink', 'side', 'dessert', 'bakery']],
+    ['pasta', ['beverage', 'drink', 'side', 'dessert']],
+    ['burger', ['beverage', 'drink', 'side', 'fries']],
+    ['sandwich', ['beverage', 'drink', 'coffee', 'side']],
+    ['wrap', ['beverage', 'drink', 'coffee', 'side']],
+    ['main', ['beverage', 'drink', 'side', 'dessert']],
+    ['savory', ['beverage', 'drink', 'coffee', 'side']],
+    ['entree', ['beverage', 'drink', 'side', 'dessert']],
+    // Drinks → suggest food
+    ['coffee', ['bakery', 'side', 'dessert', 'sandwich', 'savory']],
+    ['beverage', ['bakery', 'side', 'dessert', 'pizza', 'pasta', 'sandwich']],
+    ['drink', ['bakery', 'side', 'dessert', 'pizza', 'pasta']],
+    ['tea', ['bakery', 'side', 'dessert']],
+    ['juice', ['bakery', 'side', 'sandwich']],
+    ['shake', ['bakery', 'side', 'dessert']],
+    // Sides → suggest drinks
+    ['side', ['beverage', 'drink', 'coffee', 'juice']],
+    ['bakery', ['coffee', 'beverage', 'drink', 'tea']],
+    ['fries', ['beverage', 'drink', 'shake']],
+    // Desserts → suggest drinks
+    ['dessert', ['coffee', 'beverage', 'drink', 'tea']],
+    ['sweet', ['coffee', 'beverage', 'drink']],
+    ['cake', ['coffee', 'beverage', 'tea']],
+];
 
-const PAIRING_RULES: Record<LogicCategory, LogicCategory[]> = {
-    'Beverage': ['Side', 'Main'], // Bev -> suggest Side (Bakery) first, then Main
-    'Main': ['Beverage', 'Side'], // Main -> suggest Beverage first, then Side
-    'Side': ['Beverage'],         // Side -> suggest Beverage
-    'Dessert': ['Beverage'],      // Dessert -> suggest Beverage
-};
-
-function getLogicCategory(item: Item): LogicCategory {
-    return CATEGORY_MAP[item.category] || 'Side';
+/**
+ * Returns whether a category (needle) matches any keyword in the list.
+ * Case-insensitive substring match.
+ */
+function categoryMatchesKeywords(category: string, keywords: string[]): boolean {
+    const lower = category.toLowerCase();
+    return keywords.some(kw => lower.includes(kw));
 }
 
 /**
- * Returns a strictly deterministic recommendation based on rules.
- * Rules:
- * 1. Category Mapping: (Beverage -> Side, Main -> Beverage, etc.)
- * 2. Price Constraint: Upsell price strictly between 20% and 60% of base item price.
- * 3. Not in Cart: Exclude items already in cart/viewed.
- * 4. Ranking: Popular first, then Highest Price (Revenue Optimization).
+ * Finds complementary categories for a given item category from the available items.
+ * Returns category strings from allItems that are considered complementary.
+ */
+function getComplementaryCategories(itemCategory: string, allCategories: string[]): string[] {
+    const lowerCat = itemCategory.toLowerCase();
+
+    // Find matching pairing rule
+    for (const [keyword, complements] of COMPLEMENTARY_KEYWORDS) {
+        if (lowerCat.includes(keyword)) {
+            // Return all categories from the menu that match any complement keyword
+            return allCategories.filter(cat =>
+                cat.toLowerCase() !== lowerCat &&
+                categoryMatchesKeywords(cat, complements)
+            );
+        }
+    }
+
+    // Fallback: return all categories that are different from the base item's category
+    return allCategories.filter(cat => cat.toLowerCase() !== lowerCat);
+}
+
+// --- Core Recommendation Engine ---
+
+/**
+ * Returns a data-driven recommendation based on category pairing.
+ * Works for any restaurant with arbitrary menu categories.
+ *
+ * Logic:
+ * 1. Find complementary categories for the base item
+ * 2. Filter to items not already in cart and not the same item
+ * 3. Sort by: price ascending (affordable add-on first)
+ * 4. Return top candidate
  */
 export function getDeterministicUpsell(
     baseItem: Item,
     cartItems: Item[] = [],
     allItems: Item[] = []
 ): Recommendation | null {
-    const baseCategory = getLogicCategory(baseItem);
-    const targetCategories = PAIRING_RULES[baseCategory];
-    const basePrice = getPrice(baseItem.price);
+    // [DEBUG] Log inputs
+    console.debug("[Upsell] Selected item:", baseItem.name, "| Category:", baseItem.category);
+    console.debug("[Upsell] All available items:", allItems.length);
+
+    if (allItems.length <= 1) return null;
 
     const cartIds = new Set(cartItems.map(i => i.id));
+    const allCategories = [...new Set(allItems.map(i => i.category))];
+    const complementaryCategories = getComplementaryCategories(baseItem.category, allCategories);
 
-    // Pass 1: Strict Price Guard (20% to 60%)
-    const minPrice = basePrice * 0.20;
-    const strictMaxPrice = basePrice * 0.60;
-    const relaxedMaxPrice = basePrice * 1.0; // Relaxed to 100% of base price if strict fails
+    console.debug("[Upsell] Complementary categories:", complementaryCategories);
 
-    const getCandidates = (maxPrice: number) => {
-        return allItems.filter(candidate => {
-            if (candidate.id === baseItem.id || cartIds.has(candidate.id)) return false;
+    // Filter candidates: different item, not in cart, in a complementary category
+    let candidates = allItems.filter(candidate => {
+        if (candidate.id === baseItem.id) return false;
+        if (cartIds.has(candidate.id)) return false;
+        return complementaryCategories.some(cc =>
+            cc.toLowerCase() === candidate.category.toLowerCase()
+        );
+    });
 
-            const candidateLogCat = getLogicCategory(candidate);
-            if (!targetCategories.includes(candidateLogCat)) return false;
-
-            const price = getPrice(candidate.price);
-            return price >= minPrice && price <= maxPrice;
+    // If no complementary category matches, fall back to any different category
+    if (candidates.length === 0) {
+        candidates = allItems.filter(candidate => {
+            if (candidate.id === baseItem.id) return false;
+            if (cartIds.has(candidate.id)) return false;
+            return candidate.category.toLowerCase() !== baseItem.category.toLowerCase();
         });
-    };
-
-    let candidates = getCandidates(strictMaxPrice);
-
-    if (candidates.length === 0) {
-        // Fallback: Relax price constraint to 100% of base item
-        // Necessary because for a 150 item, 60% is 90, and we have no items < 90.
-        // This ensures we at least satisfy the category rule.
-        candidates = getCandidates(relaxedMaxPrice);
     }
 
+    // Last resort: any item that isn't the same one or in cart
     if (candidates.length === 0) {
-        return null;
+        candidates = allItems.filter(candidate =>
+            candidate.id !== baseItem.id && !cartIds.has(candidate.id)
+        );
     }
 
-    // Sort Candidates
-    // 1. Category Priority (First target category > Second)
-    // 2. Popularity (True > False)
-    // 3. Price (Highest First -> optimize revenue)
+    console.debug("[Upsell] Filtered candidates:", candidates.map(c => `${c.name} (${c.category})`));
+
+    if (candidates.length === 0) return null;
+
+    // Sort: cheapest first (affordable upsell), then alphabetical for stability
     candidates.sort((a, b) => {
-        const catAIndex = targetCategories.indexOf(getLogicCategory(a));
-        const catBIndex = targetCategories.indexOf(getLogicCategory(b));
-        if (catAIndex !== catBIndex) return catAIndex - catBIndex; // Lower index is better
-
-        if (a.popular !== b.popular) return a.popular ? -1 : 1; // Popular first
-
-        return getPrice(b.price) - getPrice(a.price); // Higher price first
+        const priceDiff = getPrice(a.price) - getPrice(b.price);
+        if (priceDiff !== 0) return priceDiff;
+        return a.name.localeCompare(b.name);
     });
 
     const selected = candidates[0];
-
-    // Deterministic Reason
-    const reason = `Perfectly pairs with your ${baseItem.name}.`;
+    const reason = `Pairs great with your ${baseItem.name}.`;
 
     return { item: selected, reason };
 }
 
-// --- Legacy Adapters (kept to avoid breaking call sites) ---
+// --- Checkout Upsell ---
 
-export async function getRecommendations(
-    viewedItem: Item,
-    allItems: Item[]
-): Promise<Recommendation> {
-    const rec = getDeterministicUpsell(viewedItem, [], allItems);
-
-    if (rec) return rec;
-
-    // Fallback if no specific rule matches (e.g. price constraint too strict)
-    // Return a 'Safe' fallback like Brownie if valid, strictly excluding self
-    const fallback = allItems.find(i => i.id !== viewedItem.id && i.category === 'Bakery' && getPrice(i.price) < getPrice(viewedItem.price));
-
-    if (fallback) {
-        return { item: fallback, reason: "A classic pairing." };
-    }
-
-    throw new Error("No recommendation available");
-}
-
+/**
+ * Returns up to 3 candidate items for checkout upsell.
+ * Filters to items from a different category, not in cart, cheapest first.
+ */
 export function getCheckoutUpsellCandidates(
     cartItems: Item[],
     _viewedItems: Item[],
     allItems: Item[] = []
 ): Item[] {
-    // Only used for checkout upsell logic - implement simplified logic
-    if (cartItems.length === 0) return [];
+    if (cartItems.length === 0 || allItems.length === 0) return [];
 
-    // Find cheap add-ons (under 150) that are not in cart
     const cartIds = new Set(cartItems.map(i => i.id));
-    return allItems
-        .filter(i => !cartIds.has(i.id) && getPrice(i.price) <= 150 && i.popular)
+    const cartCategories = new Set(cartItems.map(i => i.category.toLowerCase()));
+
+    // Find items from different categories, not in cart
+    const candidates = allItems
+        .filter(i => !cartIds.has(i.id) && !cartCategories.has(i.category.toLowerCase()))
+        .sort((a, b) => getPrice(a.price) - getPrice(b.price))
         .slice(0, 3);
+
+    // If no cross-category candidates, relax to any item not in cart
+    if (candidates.length === 0) {
+        return allItems
+            .filter(i => !cartIds.has(i.id))
+            .sort((a, b) => getPrice(a.price) - getPrice(b.price))
+            .slice(0, 3);
+    }
+
+    return candidates;
 }
 
 export async function rankCandidatesAI(
@@ -154,7 +195,7 @@ export async function rankCandidatesAI(
     approvedCandidates: Item[]
 ): Promise<Recommendation | null> {
     if (approvedCandidates.length === 0) return null;
-    return { item: approvedCandidates[0], reason: "Last minute treat?" };
+    return { item: approvedCandidates[0], reason: "A perfect addition to your order." };
 }
 
 export async function getCheckoutUpsell(
@@ -167,3 +208,4 @@ export async function getCheckoutUpsell(
     if (candidates.length === 0) return null;
     return await rankCandidatesAI(userName, cartItems, candidates);
 }
+
