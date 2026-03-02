@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext";
 import { getCheckoutUpsellCandidates, rankCandidatesAI } from "../utils/recommendations";
 import { rephraseReason, trackUpsellShown, trackOrderComplete } from "../utils/api";
+import { getCachedReason, setCachedReason } from "../utils/rephraseCache";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
 
@@ -122,21 +123,29 @@ export default function Checkout({ onBack }: CheckoutProps) {
         }
     }, [showUpsell]);
 
-    // Rephrase upsell reason when it appears
+    // Rephrase upsell reason when it appears — check cache first
     useEffect(() => {
-        if (upsellData && showUpsell) {
-            // Non-blocking rephrase
-            rephraseReason(
-                cartItems.map(i => i.name).join(", "),
-                upsellData.item.name,
-                upsellData.reason
-            ).then(newReason => {
-                if (newReason) {
-                    setUpsellData(prev => prev && prev.item.id === upsellData.item.id ? { ...prev, reason: newReason } : prev);
-                }
-            });
+        if (!upsellData || !showUpsell) return;
+
+        const cartItemsKey = [...cartItems.map(i => i.id)].sort().join(",");
+        const baseKey = `${cartItemsKey}-${upsellData.item.id}`;
+
+        // Check session cache
+        const cached = getCachedReason(baseKey);
+        if (cached) {
+            setUpsellData(prev => prev && prev.item.id === upsellData.item.id ? { ...prev, reason: cached } : prev);
+            return;
         }
-    }, [upsellData?.item.id, showUpsell]);
+
+        // Non-blocking rephrase — names sent for GPT readability
+        const cartNames = cartItems.map(i => i.name).join(", ");
+        rephraseReason(cartNames, upsellData.item.name).then(newReason => {
+            if (newReason) {
+                setCachedReason(baseKey, newReason);
+                setUpsellData(prev => prev && prev.item.id === upsellData.item.id ? { ...prev, reason: newReason } : prev);
+            }
+        });
+    }, [upsellData?.item.id, showUpsell]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
     const subtotal = cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0);

@@ -443,57 +443,66 @@ app.get("/api/analytics", (req, res) => {
  * POST /api/rephrase
  *
  * Input JSON:
- *   { baseItem: string, suggestedItem: string, deterministicReason: string }
+ *   { baseItem: string, suggestedItem: string }
  *
  * Returns:
  *   { reason: string }
  *
- * On OpenAI failure, returns deterministicReason as fallback (200).
+ * Generates ONE short persuasive sentence (20–25 words max) using GPT-4o.
+ * On OpenAI failure, returns a safe fallback (200). Never crashes order flow.
  */
 app.post("/api/rephrase", async (req, res) => {
+    const fallback = (base) => `Pairs well with your ${base}.`;
+
     try {
-        const { baseItem, suggestedItem, deterministicReason } = req.body;
+        const { baseItem, suggestedItem } = req.body;
 
         // Validate required fields
-        if (!baseItem || !suggestedItem || !deterministicReason) {
+        if (!baseItem || !suggestedItem) {
             return res.status(400).json({
-                error: "Missing required fields: baseItem, suggestedItem, deterministicReason",
+                error: "Missing required fields: baseItem, suggestedItem",
             });
         }
 
         // Call OpenAI
         try {
             const completion = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                temperature: 0.3,
-                max_tokens: 60,
+                model: "gpt-4o",
+                temperature: 0.7,
+                max_tokens: 40,
                 messages: [
                     {
                         role: "system",
-                        content:
-                            "Rephrase the given reason into one persuasive sentence under 20 words. Do not invent ingredients. Do not exaggerate. Return plain text only.",
+                        content: [
+                            "You are a restaurant menu assistant.",
+                            "Write ONE short persuasive sentence explaining why a customer should add the suggested item alongside their base item.",
+                            "Rules:",
+                            "- Maximum 20 to 25 words.",
+                            "- Be natural, specific, and non-generic.",
+                            "- Vary sentence structure every time — do not repeat the same opening or pattern.",
+                            "- No markdown, no quotation marks, no emojis.",
+                            "- Return plain text only.",
+                        ].join(" "),
                     },
                     {
                         role: "user",
-                        content: `Base item: ${baseItem}. Suggested item: ${suggestedItem}. Reason: ${deterministicReason}`,
+                        content: `Base item: ${baseItem}. Suggested item: ${suggestedItem}.`,
                     },
                 ],
             });
 
-            const rephrased = completion.choices?.[0]?.message?.content?.trim();
+            const reason = completion.choices?.[0]?.message?.content?.trim();
 
-            if (rephrased) {
-                console.log(`[Rephrase] "${deterministicReason}" → "${rephrased}"`);
-                return res.json({ reason: rephrased });
+            if (reason) {
+                return res.json({ reason });
             }
 
             // No content from API — fallback
-            console.warn("[Rephrase] Empty response from OpenAI, using fallback");
-            return res.json({ reason: deterministicReason });
+            return res.json({ reason: fallback(baseItem) });
         } catch (apiError) {
             console.error("[Rephrase] OpenAI API error:", apiError.message);
             // Return fallback with 200 — never crash
-            return res.json({ reason: deterministicReason });
+            return res.json({ reason: fallback(baseItem) });
         }
     } catch (err) {
         console.error("[Rephrase] Unexpected error:", err.message);

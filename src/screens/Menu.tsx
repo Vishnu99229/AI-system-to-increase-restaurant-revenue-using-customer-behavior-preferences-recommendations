@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { getDeterministicUpsell } from "../utils/recommendations";
-import { fetchMenu, trackUpsellShown } from "../utils/api";
+import { fetchMenu, rephraseReason, trackUpsellShown } from "../utils/api";
+import { getCachedReason, setCachedReason } from "../utils/rephraseCache";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 import { Button } from "../components/Button";
@@ -22,6 +23,10 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     // Guard: fires once per modal open, resets when modal closes
     const hasTrackedCurrentModal = useRef(false);
+
+    // Dynamic GPT reason state — shows fallback immediately, replaced async
+    const [displayReason, setDisplayReason] = useState<string | null>(null);
+    const rephraseCalledFor = useRef<string | null>(null);
 
     // Fetch menu on mount if not already loaded
     useEffect(() => {
@@ -58,6 +63,37 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         }
     }, [selectedItem, computedRecommendation, dispatch]);
 
+    // Async GPT rephrase — show fallback immediately, replace when GPT responds
+    useEffect(() => {
+        if (!computedRecommendation || !selectedItem) {
+            setDisplayReason(null);
+            return;
+        }
+
+        const baseKey = `${selectedItem.id}-${computedRecommendation.item.id}`;
+
+        // Set deterministic fallback immediately
+        setDisplayReason(computedRecommendation.reason);
+
+        // Check session cache
+        const cached = getCachedReason(baseKey);
+        if (cached) {
+            setDisplayReason(cached);
+            return;
+        }
+
+        // Prevent duplicate calls for the same pairing
+        if (rephraseCalledFor.current === baseKey) return;
+        rephraseCalledFor.current = baseKey;
+
+        rephraseReason(selectedItem.name, computedRecommendation.item.name).then(reason => {
+            if (reason) {
+                setCachedReason(baseKey, reason);
+                setDisplayReason(reason);
+            }
+        });
+    }, [selectedItem?.id, computedRecommendation?.item.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);
         setQuantity(1);
@@ -67,6 +103,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const closeDetail = () => {
         setSelectedItem(null);
         hasTrackedCurrentModal.current = false; // Reset for next modal open
+        rephraseCalledFor.current = null;
     };
 
     const handleAddToOrder = (item: Item) => {
@@ -250,7 +287,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                         <span className="text-sm font-bold text-highlight">{computedRecommendation.item.price}</span>
                                     </div>
                                     <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
-                                        "{computedRecommendation.reason}"
+                                        "{displayReason || computedRecommendation.reason}"
                                     </p>
                                     <Button
                                         onClick={() => handleAddBothToOrder(selectedItem, computedRecommendation.item)}

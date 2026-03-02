@@ -3,7 +3,6 @@ import type { Item } from "./recommendations";
 export interface RephraseRequest {
     baseItem: string;
     suggestedItem: string;
-    deterministicReason: string;
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
@@ -40,12 +39,12 @@ export async function fetchMenu(slug: string): Promise<Item[]> {
 
 /**
  * Call the backend rephrase API.
- * Returns the rephrased reason or null if the call fails.
+ * Sends baseItem and suggestedItem; GPT-4o generates the persuasive sentence.
+ * Returns the reason string or null if the call fails.
  */
 export async function rephraseReason(
     baseItem: string,
-    suggestedItem: string,
-    deterministicReason: string
+    suggestedItem: string
 ): Promise<string | null> {
     try {
         const response = await fetch(`${API_BASE}/api/rephrase`, {
@@ -56,19 +55,16 @@ export async function rephraseReason(
             body: JSON.stringify({
                 baseItem,
                 suggestedItem,
-                deterministicReason,
             }),
         });
 
         if (!response.ok) {
-            console.warn("Rephrase API failed with status:", response.status);
             return null;
         }
 
         const data: RephraseResponse = await response.json();
         return data.reason;
-    } catch (error) {
-        console.warn("Rephrase API network error:", error);
+    } catch {
         return null;
     }
 }
