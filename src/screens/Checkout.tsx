@@ -29,9 +29,18 @@ export default function Checkout({ onBack }: CheckoutProps) {
     // Upsell UI state
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
     const [showUpsell, setShowUpsell] = useState(false);
+    const [upsellLoading, setUpsellLoading] = useState(false);
 
     // Track if we've already evaluated the upsell decision (once per checkout mount)
     const hasEvaluatedUpsell = useRef(false);
+
+    // Safety guard: prevent state updates after unmount
+    const isMounted = useRef(true);
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
 
     // Explicit state tracking for upsell acceptance
     // Initialize from menu-level acceptance state so "Add Both to Order" flows through
@@ -62,6 +71,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
         // Helper to check display gates when we are ready to render
         const checkDisplayGatesAndRender = (finalRec: Recommendation) => {
+            if (!isMounted.current) return;
+
             const shouldShowCheckoutUpsell =
                 lastItemAddedId != null &&
                 !pairingAcceptedByItemId[lastItemAddedId] &&
@@ -84,11 +95,18 @@ export default function Checkout({ onBack }: CheckoutProps) {
             }
         };
 
+        // Show loading state immediately so the card renders with shimmer
+        setUpsellLoading(true);
+
         // Step 2: AI Ranking → POST /api/rank-upsell (single source of truth)
         // Backend handles GPT ranking + reason generation + fallback.
         // No separate /api/rephrase call needed.
         rankCandidatesAI(approvedCandidates, cartItems)
             .then(rec => {
+                if (!isMounted.current) return;
+
+                setUpsellLoading(false);
+
                 if (!rec) {
                     setUpsellData(null);
                     return;
@@ -97,17 +115,20 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 checkDisplayGatesAndRender(rec);
             })
             .catch(err => {
+                if (!isMounted.current) return;
+
                 console.error("[Dev] AI Ranking: Error", err);
+                setUpsellLoading(false);
                 setUpsellData(null);
             });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Track upsell shown event when it becomes visible
+    // Track upsell shown event when it becomes visible (only after loading completes)
     useEffect(() => {
-        if (showUpsell) {
+        if (showUpsell && !upsellLoading) {
             trackUpsellShown();
         }
-    }, [showUpsell]);
+    }, [showUpsell, upsellLoading]);
 
 
     const subtotal = cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0);
@@ -222,21 +243,34 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 <div className="bg-white px-6 py-8 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl relative z-20">
 
                     {/* Optional Addition - Calm Upsell */}
-                    {showUpsell && upsellData && (
+                    {(showUpsell || upsellLoading) && (
                         <div className="mb-8 bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in shadow-[0_0_15px_rgba(244,196,48,0.15)]">
                             <div className="flex justify-between items-start mb-2">
                                 <h3 className="font-heading font-bold text-dark text-lg">You might also enjoy</h3>
                             </div>
-                            <p className="text-sm text-dark/80 mb-4 font-body leading-relaxed">{upsellData.reason}</p>
+
+                            {upsellLoading ? (
+                                <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse mb-4" />
+                            ) : (
+                                <p className="text-sm text-dark/80 mb-4 font-body leading-relaxed">{upsellData?.reason}</p>
+                            )}
 
                             <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-primary/10 mb-4 shadow-sm">
-                                <div>
-                                    <p className="font-heading font-bold text-dark">{upsellData.item.name}</p>
-                                    <p className="text-sm text-highlight font-bold">{upsellData.item.price}</p>
-                                </div>
+                                {upsellLoading ? (
+                                    <div className="flex-1 space-y-2">
+                                        <div className="h-4 w-1/2 bg-gray-200 rounded animate-pulse" />
+                                        <div className="h-3 w-1/4 bg-gray-200 rounded animate-pulse" />
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <p className="font-heading font-bold text-dark">{upsellData?.item.name}</p>
+                                        <p className="text-sm text-highlight font-bold">{upsellData?.item.price}</p>
+                                    </div>
+                                )}
                                 <button
                                     onClick={handleAddUpsell}
-                                    className="bg-primary/10 hover:bg-primary/20 text-dark border border-primary/20 px-4 py-2 rounded-lg text-sm font-bold transition-colors"
+                                    disabled={upsellLoading}
+                                    className="bg-primary/10 hover:bg-primary/20 text-dark border border-primary/20 px-4 py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     Add
                                 </button>
@@ -244,7 +278,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
                             <button
                                 onClick={handleDismissUpsell}
-                                className="w-full text-center text-xs text-gray-400 hover:text-dark transition-colors font-medium uppercase tracking-wide"
+                                disabled={upsellLoading}
+                                className="w-full text-center text-xs text-gray-400 hover:text-dark transition-colors font-medium uppercase tracking-wide disabled:opacity-50"
                             >
                                 No thanks, just my order
                             </button>
