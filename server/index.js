@@ -19,9 +19,9 @@ const { Pool } = require("pg");
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === "production"
-        ? { rejectUnauthorized: false }
-        : false,
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 // --- DB Startup: Health Check + Migrations ---
@@ -48,6 +48,43 @@ const pool = new Pool({
             )
         `);
         console.log("✅ DB Migrations applied (customer_name, customer_phone, menus table)");
+
+        // --- Local Database Seeding ---
+        if (
+            process.env.NODE_ENV !== "production" &&
+            process.env.LOCAL_SEED === "true"
+        ) {
+            const menuCountRes = await pool.query("SELECT COUNT(*) FROM menus");
+            if (parseInt(menuCountRes.rows[0].count, 10) === 0) {
+                console.log("🌱 Local Dev: menus table is empty. Seeding test data...");
+
+                // 1. Ensure a test restaurant exists
+                let restRes = await pool.query(`SELECT id FROM restaurants WHERE slug = 'test-rest' LIMIT 1`);
+                if (restRes.rows.length === 0) {
+                    restRes = await pool.query(
+                        `INSERT INTO restaurants (name, slug, whatsapp_number, max_tables, config) 
+                         VALUES ('Test Restaurant', 'test-rest', '', 20, '{}') RETURNING id`
+                    );
+                }
+                const restaurantId = restRes.rows[0].id;
+
+                // 2. Insert test menu items
+                const seedItems = [
+                    { name: 'Cold Coffee', price: 180, category: 'Beverages', img: 'https://images.unsplash.com/photo-1578314675249-a6910f80cc4e?w=800' },
+                    { name: 'Croissant', price: 150, category: 'Food', img: 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=800' },
+                    { name: 'Choco Muffin', price: 120, category: 'Dessert', img: 'https://images.unsplash.com/photo-1606890737304-57a1ca8a5b62?w=800' }
+                ];
+
+                for (const item of seedItems) {
+                    await pool.query(
+                        `INSERT INTO menus (restaurant_id, name, description, price, category, image_url, is_available)
+                         VALUES ($1, $2, $3, $4, $5, $6, true)`,
+                        [restaurantId, item.name, `Delicious test ${item.name}`, item.price, item.category, item.img]
+                    );
+                }
+                console.log("✅ Local Dev: Test menus seeded successfully.");
+            }
+        }
     } catch (err) {
         console.error("❌ DB Startup Failed:", err);
     }
@@ -464,6 +501,8 @@ app.post("/api/rephrase", async (req, res) => {
             });
         }
 
+        console.log("[Rephrase] GPT call started");
+
         // Call OpenAI
         try {
             const completion = await openai.chat.completions.create({
@@ -494,13 +533,16 @@ app.post("/api/rephrase", async (req, res) => {
             const reason = completion.choices?.[0]?.message?.content?.trim();
 
             if (reason) {
+                console.log("[Rephrase] GPT success");
                 return res.json({ reason });
             }
 
             // No content from API — fallback
+            console.warn("[Rephrase] Empty response — GPT fallback used");
             return res.json({ reason: fallback(baseItem) });
         } catch (apiError) {
             console.error("[Rephrase] OpenAI API error:", apiError.message);
+            console.log("[Rephrase] GPT fallback used");
             // Return fallback with 200 — never crash
             return res.json({ reason: fallback(baseItem) });
         }
