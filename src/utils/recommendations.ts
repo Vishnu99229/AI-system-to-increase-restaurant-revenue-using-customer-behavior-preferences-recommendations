@@ -15,6 +15,10 @@ export interface Recommendation {
     reason: string;
 }
 
+// --- Config ---
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
 // --- Helpers ---
 
 const getPrice = (p: string) => parseFloat(p.replace(/[^0-9.]/g, "")) || 0;
@@ -186,13 +190,14 @@ export async function rankCandidatesAI(
     cartItems: Item[]
 ): Promise<Recommendation | null> {
     try {
-        const response = await fetch("/api/rank-upsell", {
+        console.log("RANK API TRIGGERED");
+        const response = await fetch(`${API_BASE}/api/rank-upsell`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                approvedCandidates,
+                candidates: approvedCandidates,
                 cartItems
             })
         });

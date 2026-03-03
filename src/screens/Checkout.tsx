@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext";
 import { getCheckoutUpsellCandidates, rankCandidatesAI } from "../utils/recommendations";
-import { rephraseReason, trackUpsellShown, trackOrderComplete } from "../utils/api";
-import { getCachedReason, setCachedReason } from "../utils/rephraseCache";
+import { trackUpsellShown, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
 
@@ -54,9 +53,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
         if (hasEvaluatedUpsell.current) return;
         hasEvaluatedUpsell.current = true;
 
-        const cartItemsKey = [...cartItems.map(i => i.id)].sort().join(",");
-        const cartNames = cartItems.map(i => i.name).join(", ");
-
         // Step 1: Find candidates unconditionally
         const approvedCandidates = getCheckoutUpsellCandidates(cartItems, viewedItems, state.menuItems);
 
@@ -85,11 +81,12 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 else if (checkoutUpsellShownByItemId[lastItemAddedId]) reason = "upsell already shown for this item";
 
                 console.log(`Display gate blocked because: ${reason}`);
-                // Discard modal display, but AI prep is still completed/cached
             }
         };
 
-        // Step 2: AI Ranking (always invoked if candidates exist)
+        // Step 2: AI Ranking → POST /api/rank-upsell (single source of truth)
+        // Backend handles GPT ranking + reason generation + fallback.
+        // No separate /api/rephrase call needed.
         rankCandidatesAI(approvedCandidates, cartItems)
             .then(rec => {
                 if (!rec) {
@@ -97,30 +94,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
                     return;
                 }
 
-                const recReason = rec.reason;
-                const recItem = rec.item;
-                const baseKey = `${cartItemsKey}-${recItem.id}`;
-
-                console.log("GPT request triggered");
-
-                // Step 3: Check cache or generate reason via GPT
-                const cached = getCachedReason(baseKey);
-                if (cached) {
-                    checkDisplayGatesAndRender({ item: recItem, reason: cached });
-                } else {
-                    rephraseReason(cartNames, recItem.name).then(newReason => {
-                        if (newReason) {
-                            setCachedReason(baseKey, newReason);
-                            checkDisplayGatesAndRender({ item: recItem, reason: newReason });
-                        } else {
-                            // Backend threw or returned null, use base ranking fallback
-                            checkDisplayGatesAndRender({ item: recItem, reason: recReason });
-                        }
-                    }).catch(() => {
-                        // Network failure
-                        checkDisplayGatesAndRender({ item: recItem, reason: recReason });
-                    });
-                }
+                checkDisplayGatesAndRender(rec);
             })
             .catch(err => {
                 console.error("[Dev] AI Ranking: Error", err);
