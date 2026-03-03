@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { getDeterministicUpsell } from "../utils/recommendations";
-import { fetchMenu, rephraseReason, trackUpsellShown } from "../utils/api";
-import { getCachedReason, setCachedReason } from "../utils/rephraseCache";
-import type { Item } from "../utils/recommendations";
+import { getDeterministicUpsell, rankCandidatesAI } from "../utils/recommendations";
+import { fetchMenu, trackUpsellShown } from "../utils/api";
+import type { Item, Recommendation } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 import { Button } from "../components/Button";
 
@@ -24,9 +23,20 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     // Guard: fires once per modal open, resets when modal closes
     const hasTrackedCurrentModal = useRef(false);
 
-    // Dynamic GPT reason state — shows fallback immediately, replaced async
-    const [displayReason, setDisplayReason] = useState<string | null>(null);
-    const rephraseCalledFor = useRef<string | null>(null);
+    // Single GPT recommendation state — shimmer while loading, final reason when resolved
+    const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
+    const [upsellLoading, setUpsellLoading] = useState(false);
+
+    // Safety guard: prevent ranking being called twice for the same item
+    const rankCalledFor = useRef<number | null>(null);
+
+    // Safety guard: prevent state updates after unmount
+    const isMounted = useRef(true);
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
 
     // Fetch menu on mount if not already loaded
     useEffect(() => {
@@ -49,50 +59,54 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         });
     }, [state.restaurantId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Compute recommendation dynamically for the selected item
-    const computedRecommendation = selectedItem
-        ? getDeterministicUpsell(selectedItem, state.cartItems, items)
-        : null;
-
-    // Fire trackUpsellShown() when a menu-level recommendation becomes visible
+    // When selectedItem changes: compute candidates, call rankCandidatesAI once
     useEffect(() => {
-        if (computedRecommendation && selectedItem && !hasTrackedCurrentModal.current) {
+        // Reset upsell state whenever selection changes
+        setUpsellData(null);
+        setUpsellLoading(false);
+        rankCalledFor.current = null;
+
+        if (!selectedItem) return;
+        if (items.length === 0) return;
+
+        // Build candidate list using the deterministic engine (same logic as before)
+        const candidate = getDeterministicUpsell(selectedItem, state.cartItems, items);
+        if (!candidate) return;
+
+        // Guard: only call ranking once per selected item
+        if (rankCalledFor.current === selectedItem.id) return;
+        rankCalledFor.current = selectedItem.id;
+
+        // Show shimmer immediately
+        setUpsellLoading(true);
+
+        // Single GPT call — POST /api/rank-upsell
+        rankCandidatesAI([candidate.item], state.cartItems).then(rec => {
+            if (!isMounted.current) return;
+
+            setUpsellLoading(false);
+
+            if (!rec) {
+                setUpsellData(null);
+                return;
+            }
+
+            setUpsellData(rec);
+        }).catch(() => {
+            if (!isMounted.current) return;
+            setUpsellLoading(false);
+            setUpsellData(null);
+        });
+    }, [selectedItem?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Track upsell shown — only fires once per modal, only after GPT resolves
+    useEffect(() => {
+        if (upsellData && !upsellLoading && !hasTrackedCurrentModal.current) {
             hasTrackedCurrentModal.current = true;
             trackUpsellShown();
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
-    }, [selectedItem, computedRecommendation, dispatch]);
-
-    // Async GPT rephrase — show fallback immediately, replace when GPT responds
-    useEffect(() => {
-        if (!computedRecommendation || !selectedItem) {
-            setDisplayReason(null);
-            return;
-        }
-
-        const baseKey = `${selectedItem.id}-${computedRecommendation.item.id}`;
-
-        // Set deterministic fallback immediately
-        setDisplayReason(computedRecommendation.reason);
-
-        // Check session cache
-        const cached = getCachedReason(baseKey);
-        if (cached) {
-            setDisplayReason(cached);
-            return;
-        }
-
-        // Prevent duplicate calls for the same pairing
-        if (rephraseCalledFor.current === baseKey) return;
-        rephraseCalledFor.current = baseKey;
-
-        rephraseReason(selectedItem.name, computedRecommendation.item.name).then(reason => {
-            if (reason) {
-                setCachedReason(baseKey, reason);
-                setDisplayReason(reason);
-            }
-        });
-    }, [selectedItem?.id, computedRecommendation?.item.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [upsellData, upsellLoading, dispatch]);
 
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);
@@ -102,8 +116,10 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const closeDetail = () => {
         setSelectedItem(null);
+        setUpsellData(null);
+        setUpsellLoading(false);
         hasTrackedCurrentModal.current = false; // Reset for next modal open
-        rephraseCalledFor.current = null;
+        rankCalledFor.current = null;
     };
 
     const handleAddToOrder = (item: Item) => {
@@ -275,22 +291,36 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             </div>
                         </div>
 
-                        {/* Recommendation Section */}
-                        {computedRecommendation && (
+                        {/* Recommendation Section — shimmer while GPT loads, final card when resolved */}
+                        {(upsellData || upsellLoading) && (
                             <div className="border-t border-dashed border-gray-200 pt-6">
                                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
                                     CHEF'S RECOMMENDATION FOR YOU
                                 </h3>
                                 <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
                                     <div className="flex items-start justify-between mb-2">
-                                        <h4 className="font-heading font-bold text-dark text-lg">{computedRecommendation.item.name}</h4>
-                                        <span className="text-sm font-bold text-highlight">{computedRecommendation.item.price}</span>
+                                        {upsellLoading ? (
+                                            <div className="flex-1 space-y-2">
+                                                <div className="h-4 w-1/2 bg-gray-200 rounded animate-pulse" />
+                                                <div className="h-3 w-1/4 bg-gray-200 rounded animate-pulse" />
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <h4 className="font-heading font-bold text-dark text-lg">{upsellData?.item.name}</h4>
+                                                <span className="text-sm font-bold text-highlight">{upsellData?.item.price}</span>
+                                            </>
+                                        )}
                                     </div>
-                                    <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
-                                        "{displayReason || computedRecommendation.reason}"
-                                    </p>
+                                    {upsellLoading ? (
+                                        <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse mb-4" />
+                                    ) : (
+                                        <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
+                                            "{upsellData?.reason}"
+                                        </p>
+                                    )}
                                     <Button
-                                        onClick={() => handleAddBothToOrder(selectedItem, computedRecommendation.item)}
+                                        onClick={() => upsellData && handleAddBothToOrder(selectedItem, upsellData.item)}
+                                        disabled={upsellLoading}
                                         variant="primary"
                                         fullWidth
                                     >

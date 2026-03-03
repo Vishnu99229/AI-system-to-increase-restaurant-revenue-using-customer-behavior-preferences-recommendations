@@ -56,8 +56,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [upsellAccepted, setUpsellAccepted] = useState(menuUpsellAccepted);
     const [upsellValue, setUpsellValue] = useState(menuUpsellValue);
 
-    // Evaluate upsell candidates and rephrase ONCE at checkout mount
-    // This effect handles both AI ranking and GPT generation, decoupled from display gates
+    // Evaluate upsell candidates ONCE at checkout mount
+    // This effect decoupled from display gates
     useEffect(() => {
         if (hasEvaluatedUpsell.current) return;
         hasEvaluatedUpsell.current = true;
@@ -100,7 +100,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
         // Step 2: AI Ranking → POST /api/rank-upsell (single source of truth)
         // Backend handles GPT ranking + reason generation + fallback.
-        // No separate /api/rephrase call needed.
         rankCandidatesAI(approvedCandidates, cartItems)
             .then(rec => {
                 if (!isMounted.current) return;

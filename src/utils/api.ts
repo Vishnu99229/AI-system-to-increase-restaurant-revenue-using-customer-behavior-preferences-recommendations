@@ -1,15 +1,6 @@
 import type { Item } from "./recommendations";
 
-export interface RephraseRequest {
-    baseItem: string;
-    suggestedItem: string;
-}
-
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-
-export interface RephraseResponse {
-    reason: string;
-}
 
 /**
  * Fetches menu items for a restaurant by slug.
@@ -34,38 +25,6 @@ export async function fetchMenu(slug: string): Promise<Item[]> {
     } catch (error) {
         console.warn("Menu fetch network error:", error);
         return [];
-    }
-}
-
-/**
- * Call the backend rephrase API.
- * Sends baseItem and suggestedItem; GPT-4o generates the persuasive sentence.
- * Returns the reason string or null if the call fails.
- */
-export async function rephraseReason(
-    baseItem: string,
-    suggestedItem: string
-): Promise<string | null> {
-    try {
-        const response = await fetch(`${API_BASE}/api/rephrase`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                baseItem,
-                suggestedItem,
-            }),
-        });
-
-        if (!response.ok) {
-            return null;
-        }
-
-        const data: RephraseResponse = await response.json();
-        return data.reason;
-    } catch {
-        return null;
     }
 }
 
