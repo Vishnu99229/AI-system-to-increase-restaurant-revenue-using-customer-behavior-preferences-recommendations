@@ -215,7 +215,6 @@ export async function rankCandidatesAI(
 }
 
 export async function getCheckoutUpsell(
-    userName: string,
     cartItems: Item[],
     viewedItems: Item[],
     allItems: Item[] = []
