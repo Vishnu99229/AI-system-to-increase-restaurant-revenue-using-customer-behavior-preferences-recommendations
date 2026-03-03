@@ -90,9 +90,12 @@ export default function Checkout({ onBack }: CheckoutProps) {
         };
 
         // Step 2: AI Ranking (always invoked if candidates exist)
-        rankCandidatesAI(state.userName, cartItems, approvedCandidates)
+        rankCandidatesAI(approvedCandidates, cartItems)
             .then(rec => {
-                if (!rec) throw new Error("rankCandidatesAI returned null");
+                if (!rec) {
+                    setUpsellData(null);
+                    return;
+                }
 
                 const recReason = rec.reason;
                 const recItem = rec.item;
@@ -121,12 +124,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
             })
             .catch(err => {
                 console.error("[Dev] AI Ranking: Error", err);
-                // Fallback to top deterministic candidate if ranking completely fails
-                const fallbackRec = {
-                    item: approvedCandidates[0],
-                    reason: "Perfect addition to your order."
-                };
-                checkDisplayGatesAndRender(fallbackRec);
+                setUpsellData(null);
             });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
