@@ -182,12 +182,38 @@ export function getCheckoutUpsellCandidates(
 }
 
 export async function rankCandidatesAI(
-    _userName: string,
-    _cartItems: Item[],
+    userName: string,
+    cartItems: Item[],
     approvedCandidates: Item[]
 ): Promise<Recommendation | null> {
-    if (approvedCandidates.length === 0) return null;
-    return { item: approvedCandidates[0], reason: "A perfect addition to your order." };
+    if (!approvedCandidates.length) return null;
+
+    try {
+        const response = await fetch("/api/rank-upsell", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                userName,
+                cartItems,
+                candidates: approvedCandidates
+            })
+        });
+
+        if (!response.ok) throw new Error("Ranking failed");
+
+        const data = await response.json();
+
+        if (!data?.item) throw new Error("Invalid response");
+
+        return data;
+
+    } catch (err) {
+        console.error("AI ranking failed, falling back", err);
+        return {
+            item: approvedCandidates[0],
+            reason: "A perfect addition to your order."
+        };
+    }
 }
 
 export async function getCheckoutUpsell(

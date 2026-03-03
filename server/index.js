@@ -477,6 +477,116 @@ app.get("/api/analytics", (req, res) => {
 });
 
 /**
+ * POST /api/rank-upsell
+ *
+ * Input JSON:
+ *   { userName: string, cartItems: [], candidates: [] }
+ * 
+ * Returns:
+ *   { item: {}, reason: string }
+ *
+ * AI decides which candidate to recommend AND generates a persuasive reason.
+ * Fallback to deterministic (first candidate) on any failure.
+ */
+app.post("/api/rank-upsell", async (req, res) => {
+    try {
+        const { userName, cartItems, candidates } = req.body;
+
+        if (!candidates || !Array.isArray(candidates) || candidates.length === 0) {
+            return res.status(400).json({ error: "No candidates provided" });
+        }
+
+        const fallback = {
+            item: candidates[0],
+            reason: "A perfect addition to your order."
+        };
+
+        if (!process.env.OPENAI_API_KEY) {
+            return res.json(fallback);
+        }
+
+        console.log(`[RankUpsell] GPT ranking started for ${candidates.length} candidates`);
+
+        const cartSimplified = cartItems?.map(i => `${i.name} (₹${i.price})`).join(", ") || "Empty";
+        const candidatesSimplified = candidates.map(c => `ID: ${c.id} | ${c.name} | Category: ${c.category} | ₹${c.price}`).join("\n");
+
+        const systemPrompt = `You are an expert restaurant upsell strategist.
+Choose the best item to recommend based on psychological complementarity, perceived value, and likelihood of add-on purchase.
+Return ONLY valid JSON in this format:
+{
+  "selectedItemId": number,
+  "persuasiveReason": "string"
+}
+
+The persuasiveReason must:
+- Be emotionally compelling
+- Be specific to the cart context
+- Encourage bundling behavior
+- Avoid generic phrases
+- Not mention AI`;
+
+        const userPrompt = `Customer name: ${userName || 'Guest'}
+Items currently in cart: ${cartSimplified}
+
+Candidate items list:
+${candidatesSimplified}`;
+
+        try {
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4o",
+                temperature: 0.7,
+                max_tokens: 200,
+                response_format: { type: "json_object" },
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ]
+            });
+
+            const content = completion.choices?.[0]?.message?.content?.trim();
+            if (!content) throw new Error("Empty response from GPT");
+
+            const parsed = JSON.parse(content);
+            const selectedItemId = parsed.selectedItemId;
+            const persuasiveReason = parsed.persuasiveReason;
+
+            if (selectedItemId == null || !persuasiveReason) {
+                throw new Error("Parsed JSON missing required keys");
+            }
+
+            const selectedCandidate = candidates.find(c => c.id === selectedItemId);
+
+            if (!selectedCandidate) {
+                throw new Error(`GPT selected invalid ID: ${selectedItemId}`);
+            }
+
+            console.log(`[RankUpsell] GPT success: Selected ${selectedCandidate.name}`);
+            return res.json({
+                item: selectedCandidate,
+                reason: persuasiveReason
+            });
+
+        } catch (apiError) {
+            console.error("[RankUpsell] GPT or JSON parsing failed:", apiError.message);
+            console.log("[RankUpsell] Using deterministic fallback");
+            return res.json(fallback);
+        }
+
+    } catch (err) {
+        console.error("[RankUpsell] Unexpected error:", err.message);
+        // Fallback on total failure
+        try {
+            return res.json({
+                item: req.body?.candidates?.[0],
+                reason: "A perfect addition to your order."
+            });
+        } catch {
+            return res.status(500).json({ error: "Internal server error" });
+        }
+    }
+});
+
+/**
  * POST /api/rephrase
  *
  * Input JSON:
