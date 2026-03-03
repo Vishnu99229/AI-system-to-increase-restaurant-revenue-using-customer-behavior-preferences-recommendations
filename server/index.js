@@ -510,32 +510,43 @@ app.post("/api/rank-upsell", async (req, res) => {
         const cartSimplified = cartItems?.map(i => `${i.name} (₹${i.price})`).join(", ") || "Empty";
         const candidatesSimplified = candidates.map(c => `ID: ${c.id} | ${c.name} | Category: ${c.category} | ₹${c.price}`).join("\n");
 
-        const systemPrompt = `You are an expert restaurant upsell strategist.
-Choose the best item to recommend based on psychological complementarity, perceived value, and likelihood of add-on purchase.
-Return ONLY valid JSON in this format:
+        const systemPrompt = `You are generating ultra-concise upsell microcopy inside a premium restaurant ordering interface.
+
+Return JSON only:
 {
-  "selectedItemId": number,
-  "persuasiveReason": "string"
+  "itemId": number,
+  "reason": string
 }
 
-The persuasiveReason must:
-- Be emotionally compelling
-- Be specific to the cart context
-- Encourage bundling behavior
-- Avoid generic phrases
-- Not mention AI`;
+The reason must:
+- Be 8 to 15 words.
+- Be exactly one sentence.
+- Acknowledge the customer's current choice subtly.
+- Suggest the upsell enhances or elevates the experience.
+- Use subtle psychological persuasion (completion bias, indulgence, or refinement framing).
+- Avoid hype or aggressive selling.
+- Avoid generic phrases like "pairs well", "perfect addition", "goes perfectly", "rounds off", "completes your meal", or "finishing touch".
+- No exclamation marks.
+- No emojis.
+- No markdown.
 
-        const userPrompt = `Customer name: ${userName || 'Guest'}
-Items currently in cart: ${cartSimplified}
+Vary the appreciation phrasing to avoid repetition.
+Imply subtle loss aversion by suggesting the experience feels more complete with this item.
+Avoid repetitive sentence structures.
+Keep it sharp, intelligent, refined, and persuasive without sounding pushy.`;
 
-Candidate items list:
-${candidatesSimplified}`;
+        const userPrompt = `Items currently in cart: ${cartSimplified}
+
+Candidate items to recommend from:
+${candidatesSimplified}
+
+Return JSON selecting the best itemId and a reason following all constraints.`;
 
         try {
             const completion = await openai.chat.completions.create({
                 model: "gpt-4o",
                 temperature: 0.7,
-                max_tokens: 200,
+                max_tokens: 60,
                 response_format: { type: "json_object" },
                 messages: [
                     { role: "system", content: systemPrompt },
@@ -547,11 +558,23 @@ ${candidatesSimplified}`;
             if (!content) throw new Error("Empty response from GPT");
 
             const parsed = JSON.parse(content);
-            const selectedItemId = parsed.selectedItemId;
-            const persuasiveReason = parsed.persuasiveReason;
+            const selectedItemId = parsed.itemId;
+            let reason = parsed.reason;
 
-            if (selectedItemId == null || !persuasiveReason) {
+            if (selectedItemId == null || !reason) {
                 throw new Error("Parsed JSON missing required keys");
+            }
+
+            // --- Safety clamp: enforce 8–15 word bounds ---
+            const wordCount = reason.trim().split(/\s+/).length;
+            if (wordCount > 15) {
+                // Trim to first 14 words
+                reason = reason.trim().split(/\s+/).slice(0, 14).join(" ") + ".";
+                console.log(`[RankUpsell] Reason trimmed from ${wordCount} to 14 words`);
+            } else if (wordCount < 8) {
+                // Too short — use controlled fallback template
+                reason = "Smart choice. This elevates the experience.";
+                console.log(`[RankUpsell] Reason too short (${wordCount} words) — using fallback template`);
             }
 
             const selectedCandidate = candidates.find(c => c.id === selectedItemId);
@@ -560,10 +583,10 @@ ${candidatesSimplified}`;
                 throw new Error(`GPT selected invalid ID: ${selectedItemId}`);
             }
 
-            console.log(`[RankUpsell] GPT success: Selected ${selectedCandidate.name}`);
+            console.log(`[RankUpsell] GPT success: Selected ${selectedCandidate.name} (${reason.trim().split(/\s+/).length} words)`);
             return res.json({
                 item: selectedCandidate,
-                reason: persuasiveReason
+                reason
             });
 
         } catch (apiError) {
