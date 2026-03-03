@@ -48,73 +48,87 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [upsellAccepted, setUpsellAccepted] = useState(menuUpsellAccepted);
     const [upsellValue, setUpsellValue] = useState(menuUpsellValue);
 
-    // Evaluate upsell ONCE at checkout mount - pure function logic
-    // This effect intentionally runs only once per checkout visit
+    // Evaluate upsell candidates and rephrase ONCE at checkout mount
+    // This effect handles both AI ranking and GPT generation, decoupled from display gates
     useEffect(() => {
-        // Skip if already evaluated in this checkout session
-        if (hasEvaluatedUpsell.current) {
-            return;
-        }
+        if (hasEvaluatedUpsell.current) return;
+        hasEvaluatedUpsell.current = true;
 
-        // Console log for debugging (per requirements)
-        console.log("Checkout Upsell Evaluation", {
-            lastItemAddedId,
-            pairingAcceptedByItemId,
-            checkoutUpsellShownByItemId,
-        });
+        const cartItemsKey = [...cartItems.map(i => i.id)].sort().join(",");
+        const cartNames = cartItems.map(i => i.name).join(", ");
 
-        // Per-item pure function: shouldShowCheckoutUpsell
-        const shouldShowCheckoutUpsell =
-            lastItemAddedId != null &&
-            !pairingAcceptedByItemId[lastItemAddedId] &&
-            !checkoutUpsellShownByItemId[lastItemAddedId];
-
-        if (!shouldShowCheckoutUpsell) {
-            console.log("[Dev] Upsell Decision: No Render (Per-item gates failed)");
-            hasEvaluatedUpsell.current = true;
-            return;
-        }
-
-        // Only reach here if shouldShowCheckoutUpsell is true
-        // Step 1: Deterministic confidence gate
+        // Step 1: Find candidates unconditionally
         const approvedCandidates = getCheckoutUpsellCandidates(cartItems, viewedItems, state.menuItems);
 
-        if (approvedCandidates.length > 0) {
-            console.log("[Dev] Upsell Decision: Render (Gates passed, candidates found)");
-
-            // Step 2: AI Ranking (Safe integration after gates)
-            rankCandidatesAI(state.userName, cartItems, approvedCandidates)
-                .then(rec => {
-                    if (rec) {
-                        console.log("[Dev] AI Ranking: Success", rec.item.name);
-                        setUpsellData(rec);
-                        setShowUpsell(true);
-                        // Mark checkout upsell as shown for this specific item
-                        dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN_FOR_ITEM", payload: lastItemAddedId });
-                        dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN" }); // legacy compat
-                        dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellShownCount" });
-                    }
-                })
-                .catch(err => {
-                    console.error("[Dev] AI Ranking: Error", err);
-                    // Fallback to top deterministic candidate
-                    const fallbackRec = {
-                        item: approvedCandidates[0],
-                        reason: "Perfect addition to your order."
-                    };
-                    setUpsellData(fallbackRec);
-                    setShowUpsell(true);
-                    dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN_FOR_ITEM", payload: lastItemAddedId });
-                    dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN" }); // legacy compat
-                    dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellShownCount" });
-                });
-        } else {
-            console.log("[Dev] Upsell Decision: No Render (No candidates passed confidence gate)");
+        if (approvedCandidates.length === 0) {
+            return; // No candidates available
         }
 
-        hasEvaluatedUpsell.current = true;
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        // Helper to check display gates when we are ready to render
+        const checkDisplayGatesAndRender = (finalRec: Recommendation) => {
+            const shouldShowCheckoutUpsell =
+                lastItemAddedId != null &&
+                !pairingAcceptedByItemId[lastItemAddedId] &&
+                !checkoutUpsellShownByItemId[lastItemAddedId];
+
+            if (shouldShowCheckoutUpsell) {
+                console.log("Display gate passed");
+                setUpsellData(finalRec);
+                setShowUpsell(true);
+                dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN_FOR_ITEM", payload: lastItemAddedId });
+                dispatch({ type: "MARK_CHECKOUT_UPSELL_SHOWN" }); // legacy compat
+                dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellShownCount" });
+            } else {
+                let reason = "Unknown";
+                if (lastItemAddedId == null) reason = "lastItemAddedId is null";
+                else if (pairingAcceptedByItemId[lastItemAddedId]) reason = "pairing previously accepted for this item";
+                else if (checkoutUpsellShownByItemId[lastItemAddedId]) reason = "upsell already shown for this item";
+
+                console.log(`Display gate blocked because: ${reason}`);
+                // Discard modal display, but AI prep is still completed/cached
+            }
+        };
+
+        // Step 2: AI Ranking (always invoked if candidates exist)
+        rankCandidatesAI(state.userName, cartItems, approvedCandidates)
+            .then(rec => {
+                if (!rec) throw new Error("rankCandidatesAI returned null");
+
+                const recReason = rec.reason;
+                const recItem = rec.item;
+                const baseKey = `${cartItemsKey}-${recItem.id}`;
+
+                console.log("GPT request triggered");
+
+                // Step 3: Check cache or generate reason via GPT
+                const cached = getCachedReason(baseKey);
+                if (cached) {
+                    checkDisplayGatesAndRender({ item: recItem, reason: cached });
+                } else {
+                    rephraseReason(cartNames, recItem.name).then(newReason => {
+                        if (newReason) {
+                            setCachedReason(baseKey, newReason);
+                            checkDisplayGatesAndRender({ item: recItem, reason: newReason });
+                        } else {
+                            // Backend threw or returned null, use base ranking fallback
+                            checkDisplayGatesAndRender({ item: recItem, reason: recReason });
+                        }
+                    }).catch(() => {
+                        // Network failure
+                        checkDisplayGatesAndRender({ item: recItem, reason: recReason });
+                    });
+                }
+            })
+            .catch(err => {
+                console.error("[Dev] AI Ranking: Error", err);
+                // Fallback to top deterministic candidate if ranking completely fails
+                const fallbackRec = {
+                    item: approvedCandidates[0],
+                    reason: "Perfect addition to your order."
+                };
+                checkDisplayGatesAndRender(fallbackRec);
+            });
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Track upsell shown event when it becomes visible
     useEffect(() => {
@@ -122,30 +136,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
             trackUpsellShown();
         }
     }, [showUpsell]);
-
-    // Rephrase upsell reason when it appears — check cache first
-    useEffect(() => {
-        if (!upsellData || !showUpsell) return;
-
-        const cartItemsKey = [...cartItems.map(i => i.id)].sort().join(",");
-        const baseKey = `${cartItemsKey}-${upsellData.item.id}`;
-
-        // Check session cache
-        const cached = getCachedReason(baseKey);
-        if (cached) {
-            setUpsellData(prev => prev && prev.item.id === upsellData.item.id ? { ...prev, reason: cached } : prev);
-            return;
-        }
-
-        // Non-blocking rephrase — names sent for GPT readability
-        const cartNames = cartItems.map(i => i.name).join(", ");
-        rephraseReason(cartNames, upsellData.item.name).then(newReason => {
-            if (newReason) {
-                setCachedReason(baseKey, newReason);
-                setUpsellData(prev => prev && prev.item.id === upsellData.item.id ? { ...prev, reason: newReason } : prev);
-            }
-        });
-    }, [upsellData?.item.id, showUpsell]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
     const subtotal = cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0);
