@@ -41,6 +41,29 @@ export async function trackUpsellShown(): Promise<void> {
 }
 
 /**
+ * Logs a granular upsell event (shown, accepted, rejected) to PostgreSQL.
+ * Fire-and-forget: never blocks UI. Errors are silently logged.
+ */
+export function trackUpsellEvent(params: {
+    restaurant_slug: string;
+    table_number: string;
+    item_id: number;
+    cart_value: number;
+    upsell_value: number;
+    event_type: "shown" | "accepted" | "rejected";
+    gpt_word_count: number;
+    upsell_reason: string;
+}): void {
+    fetch(`${API_BASE}/api/upsell-event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+    }).catch((error) => {
+        console.warn("Analytics error (upsell-event):", error);
+    });
+}
+
+/**
  * Submits a completed order to the slug-based endpoint.
  */
 export async function trackOrderComplete(

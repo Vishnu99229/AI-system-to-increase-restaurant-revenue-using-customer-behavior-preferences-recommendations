@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext";
 import { getCheckoutUpsellCandidates, rankCandidatesAI } from "../utils/recommendations";
-import { trackUpsellShown, trackOrderComplete } from "../utils/api";
+import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
 
@@ -122,11 +122,25 @@ export default function Checkout({ onBack }: CheckoutProps) {
             });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Build upsell event payload from current state — used for shown/accepted/rejected
+    const buildUpsellEventPayload = (eventType: "shown" | "accepted" | "rejected") => ({
+        restaurant_slug: state.restaurantId,
+        table_number: state.tableNumber || "",
+        item_id: upsellData?.item.id ?? 0,
+        cart_value: Math.round(subtotal),
+        upsell_value: upsellData ? parsePrice(upsellData.item.price) : 0,
+        event_type: eventType,
+        gpt_word_count: upsellData?.reason ? upsellData.reason.split(" ").length : 0,
+        upsell_reason: upsellData?.reason || "",
+    });
+
     // Track upsell shown event when it becomes visible (only after loading completes)
     useEffect(() => {
         if (showUpsell && !upsellLoading) {
             trackUpsellShown();
+            trackUpsellEvent(buildUpsellEventPayload("shown"));
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showUpsell, upsellLoading]);
 
 
@@ -167,6 +181,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
     const handleAddUpsell = () => {
         if (!upsellData) return;
+        trackUpsellEvent(buildUpsellEventPayload("accepted"));
         dispatch({ type: "ADD_TO_CART", payload: upsellData.item });
         dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellAcceptedCount" });
         setUpsellAccepted(true);
@@ -175,6 +190,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     };
 
     const handleDismissUpsell = () => {
+        trackUpsellEvent(buildUpsellEventPayload("rejected"));
         dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellDismissedCount" });
         setShowUpsell(false);
         // Do NOT navigate, clear cart, or reset lastItemAddedId

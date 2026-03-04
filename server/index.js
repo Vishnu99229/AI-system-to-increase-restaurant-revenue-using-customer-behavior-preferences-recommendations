@@ -47,7 +47,22 @@ const pool = new Pool({
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        console.log("✅ DB Migrations applied (customer_name, customer_phone, menus table)");
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS upsell_events (
+                id SERIAL PRIMARY KEY,
+                restaurant_slug TEXT,
+                table_number TEXT,
+                item_id INTEGER,
+                cart_value INTEGER,
+                upsell_value INTEGER,
+                event_type TEXT CHECK (event_type IN ('shown','accepted','rejected')),
+                gpt_word_count INTEGER,
+                upsell_reason TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        console.log("✅ DB Migrations applied (customer_name, customer_phone, menus table, upsell_events)");
 
         // --- Local Database Seeding ---
         if (
@@ -298,6 +313,49 @@ app.post("/api/upsell-shown", (req, res) => {
     analytics.upsellShown++;
     // console.log("[Analytics] Upsell shown");
     res.status(200).send("OK");
+});
+
+/**
+ * POST /api/upsell-event
+ * Logs upsell analytics events (shown, accepted, rejected) to PostgreSQL.
+ * Fire-and-forget: errors are logged but never block UI or order flow.
+ */
+app.post("/api/upsell-event", async (req, res) => {
+    try {
+        const {
+            restaurant_slug,
+            table_number,
+            item_id,
+            cart_value,
+            upsell_value,
+            event_type,
+            gpt_word_count,
+            upsell_reason
+        } = req.body;
+
+        console.log(`[UpsellEvent] ${event_type} item:${item_id}`);
+
+        await pool.query(
+            `INSERT INTO upsell_events
+            (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [
+                restaurant_slug,
+                table_number,
+                item_id,
+                cart_value,
+                upsell_value,
+                event_type,
+                gpt_word_count,
+                upsell_reason
+            ]
+        );
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Upsell event logging error:", err);
+        res.status(500).json({ error: "Failed to log upsell event" });
+    }
 });
 
 /**
