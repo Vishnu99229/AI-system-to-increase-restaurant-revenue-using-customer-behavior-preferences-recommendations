@@ -4,46 +4,32 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 /**
  * Fetches menu items for a restaurant by slug.
- * Returns an empty array on error.
  */
 export async function fetchMenu(slug: string): Promise<Item[]> {
     try {
         const response = await fetch(`${API_BASE}/api/${slug}/menu`);
-        if (!response.ok) {
-            console.warn("Menu fetch failed with status:", response.status);
-            return [];
-        }
+        if (!response.ok) return [];
         const rows = await response.json();
-        return rows.map((row: { id: number; name: string; description?: string; price: string | number; category?: string; image_url?: string }) => ({
+        return rows.map((row: any) => ({
             id: row.id,
             name: row.name,
             description: row.description || "",
             price: `₹${parseFloat(String(row.price)).toFixed(0)}`,
             popular: false,
             category: row.category || "Other",
+            image_url: row.image_url
         }));
     } catch (error) {
-        console.warn("Menu fetch network error:", error);
         return [];
     }
 }
 
-/**
- * Tracks when an upsell suggestion is displayed.
- */
 export async function trackUpsellShown(): Promise<void> {
     try {
         await fetch(`${API_BASE}/api/upsell-shown`, { method: "POST" });
-    } catch (error) {
-        // Analytics should not block app flow
-        console.warn("Analytics error (upsell-shown):", error);
-    }
+    } catch (error) {}
 }
 
-/**
- * Logs a granular upsell event (shown, accepted, rejected) to PostgreSQL.
- * Fire-and-forget: never blocks UI. Errors are silently logged.
- */
 export function trackUpsellEvent(params: {
     restaurant_slug: string;
     table_number: string;
@@ -58,14 +44,9 @@ export function trackUpsellEvent(params: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(params),
-    }).catch((error) => {
-        console.warn("Analytics error (upsell-event):", error);
-    });
+    }).catch(() => {});
 }
 
-/**
- * Submits a completed order to the slug-based endpoint.
- */
 export async function trackOrderComplete(
     slug: string,
     orderId: string,
@@ -83,20 +64,85 @@ export async function trackOrderComplete(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 orderId,
-                totalValue,
+                total: totalValue,
                 upsellAccepted,
                 upsellValue,
-                items: items.map(i => ({ name: i.name, price: i.price })),
-                subtotal: totalValue / 1.05, // approximate from total
-                tax: totalValue - totalValue / 1.05,
-                total: totalValue,
-                pairing_accepted: upsellAccepted,
+                items,
                 tableNumber,
                 customer_name: customerName,
                 customer_phone: customerPhone,
             }),
         });
-    } catch (error) {
-        console.warn("Analytics error (order-complete):", error);
-    }
+    } catch (error) {}
+}
+
+// --- Admin API ---
+
+const getAuthHeader = () => {
+    const token = localStorage.getItem("admin_token");
+    return token ? { "Authorization": `Bearer ${token}` } : {};
+};
+
+export async function loginAdmin(credentials: { email: string; password: string }) {
+    const res = await fetch(`${API_BASE}/api/admin/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials)
+    });
+    if (!res.ok) throw new Error("Login failed");
+    const data = await res.json();
+    localStorage.setItem("admin_token", data.token);
+    localStorage.setItem("admin_slug", data.admin.slug);
+    return data;
+}
+
+export async function fetchAdminAnalytics(slug: string) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/analytics`, {
+        headers: getAuthHeader()
+    });
+    if (!res.ok) throw new Error("Failed to fetch analytics");
+    return res.json();
+}
+
+export async function fetchAdminOrders(slug: string) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/orders`, {
+        headers: getAuthHeader()
+    });
+    if (!res.ok) throw new Error("Failed to fetch orders");
+    return res.json();
+}
+
+export async function updateOrderStatus(slug: string, orderId: number, status: string) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/orders/${orderId}/status`, {
+        method: "PUT",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+    });
+    return res.ok;
+}
+
+export async function addMenuItem(slug: string, item: any) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/menu`, {
+        method: "POST",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify(item)
+    });
+    return res.json();
+}
+
+export async function updateMenuItem(slug: string, id: number, item: any) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/menu/${id}`, {
+        method: "PUT",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify(item)
+    });
+    return res.json();
+}
+
+export async function deleteMenuItem(slug: string, id: number) {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/menu/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeader()
+    });
+    return res.ok;
 }

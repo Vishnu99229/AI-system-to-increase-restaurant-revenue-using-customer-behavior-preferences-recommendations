@@ -14,6 +14,10 @@ const express = require("express");
 const OpenAI = require("openai");
 const twilio = require("twilio");
 const { Pool } = require("pg");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret_for_dev";
 
 // --- PostgreSQL Pool ---
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
@@ -31,8 +35,33 @@ const pool = new Pool({
         console.log("✅ DB Connected:", test.rows[0]);
 
         // Idempotent schema migrations
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS restaurants (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                slug VARCHAR(255) UNIQUE NOT NULL,
+                domain VARCHAR(255) UNIQUE NOT NULL,
+                whatsapp_number VARCHAR(20),
+                max_tables INTEGER DEFAULT 10,
+                config JSONB DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255)`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(20)`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending'`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                restaurant_id INTEGER REFERENCES restaurants(id) ON DELETE CASCADE,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS menus (
@@ -62,28 +91,40 @@ const pool = new Pool({
                 created_at TIMESTAMP DEFAULT NOW()
             )
         `);
-        console.log("✅ DB Migrations applied (customer_name, customer_phone, menus table, upsell_events)");
+        console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events)");
 
         // --- Local Database Seeding ---
         if (
-            process.env.NODE_ENV !== "production" &&
-            process.env.LOCAL_SEED === "true"
+            process.env.NODE_ENV !== "production"
         ) {
+            // 1. Ensure a test restaurant exists
+            let restRes = await pool.query(`SELECT id FROM restaurants WHERE domain = 'demo-cafe' LIMIT 1`);
+            let restaurantId;
+            if (restRes.rows.length === 0) {
+                console.log("🌱 Seeding test restaurant...");
+                const insertRes = await pool.query(
+                    `INSERT INTO restaurants (name, slug, domain, whatsapp_number, max_tables, config) 
+                     VALUES ('Demo Cafe', 'demo-cafe', 'demo-cafe', '', 20, '{}') RETURNING id`
+                );
+                restaurantId = insertRes.rows[0].id;
+            } else {
+                restaurantId = restRes.rows[0].id;
+            }
+
+            // 2. Ensure a test admin exists
+            const adminRes = await pool.query("SELECT id FROM admins WHERE email = 'admin@demo.cafe'");
+            if (adminRes.rows.length === 0) {
+                const hashedPassword = await bcrypt.hash("admin123", 10);
+                await pool.query(
+                    "INSERT INTO admins (restaurant_id, email, password_hash) VALUES ($1, $2, $3)",
+                    [restaurantId, "admin@demo.cafe", hashedPassword]
+                );
+                console.log("🌱 Local Dev: Admin user seeded (admin@demo.cafe / admin123)");
+            }
+
             const menuCountRes = await pool.query("SELECT COUNT(*) FROM menus");
             if (parseInt(menuCountRes.rows[0].count, 10) === 0) {
                 console.log("🌱 Local Dev: menus table is empty. Seeding test data...");
-
-                // 1. Ensure a test restaurant exists
-                let restRes = await pool.query(`SELECT id FROM restaurants WHERE slug = 'test-rest' LIMIT 1`);
-                if (restRes.rows.length === 0) {
-                    restRes = await pool.query(
-                        `INSERT INTO restaurants (name, slug, whatsapp_number, max_tables, config) 
-                         VALUES ('Test Restaurant', 'test-rest', '', 20, '{}') RETURNING id`
-                    );
-                }
-                const restaurantId = restRes.rows[0].id;
-
-                // 2. Insert test menu items
                 const seedItems = [
                     { name: 'Cold Coffee', price: 180, category: 'Beverages', img: 'https://images.unsplash.com/photo-1578314675249-a6910f80cc4e?w=800' },
                     { name: 'Croissant', price: 150, category: 'Food', img: 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=800' },
@@ -108,642 +149,267 @@ const pool = new Pool({
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- CORS Configuration (manual middleware for Express 5 reliability) ---
+// --- Middleware ---
+const authenticateAdmin = async (req, res, next) => {
+    try {
+        const token = req.headers.authorization?.split(" ")[1];
+        if (!token) return res.status(401).json({ error: "Access denied" });
+
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.admin = decoded;
+        next();
+    } catch (err) {
+        res.status(401).json({ error: "Invalid token" });
+    }
+};
+
+// --- CORS Configuration ---
 const ALLOWED_ORIGINS = [
     "https://orlena.talk",
     "https://api.orlena.talk",
     "https://qr-menu-upsell.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:5174",
 ];
 
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    if (ALLOWED_ORIGINS.includes(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
+    if (ALLOWED_ORIGINS.includes(origin) || process.env.NODE_ENV !== "production") {
+        res.setHeader("Access-Control-Allow-Origin", origin || "*");
     }
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Credentials", "true");
 
-    // Handle preflight
-    if (req.method === "OPTIONS") {
-        return res.sendStatus(204);
-    }
+    if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
 });
 
-// --- Body Parser ---
 app.use(express.json());
 
-// --- Health Check ---
-app.get("/", (req, res) => {
-    res.json({ status: "ok", service: "goschedule-qr-backend" });
-});
-
-// --- OpenAI Client ---
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
-
-// --- Twilio Client (WhatsApp) ---
-let twilioClient = null;
-const TWILIO_FROM = process.env.TWILIO_WHATSAPP_NUMBER
-    ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`
-    : null;
-const TWILIO_TO = process.env.RESTAURANT_WHATSAPP_NUMBER
-    ? `whatsapp:${process.env.RESTAURANT_WHATSAPP_NUMBER}`
-    : null;
-
-if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
-    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    console.log("[Twilio] Client initialized for WhatsApp notifications.");
-    console.log("[Twilio] FROM:", TWILIO_FROM || "NOT SET");
-    console.log("[Twilio] TO:", TWILIO_TO || "NOT SET");
-} else {
-    console.warn("[Twilio] Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN — WhatsApp notifications disabled.");
-}
-
-// --- Multi-Restaurant Config ---
-const restaurants = {
-    "thirdwave-koramangala": {
-        name: "Thirdwave Koramangala",
-        whatsappNumber: process.env.RESTAURANT_WHATSAPP_NUMBER,
-        maxTables: 20,
-    },
-};
-
-// --- Analytics Store (In-Memory) ---
-let analytics = {
-    orders: [],
-    upsellShown: 0,
-    upsellAccepted: 0,
-};
-
-// --- WhatsApp Notification Helper ---
-
-/**
- * Sends a WhatsApp message to the restaurant for a completed order.
- * Fire-and-forget: errors are logged but never propagated.
- */
-async function sendOrderWhatsApp({ orderId, totalValue, upsellAccepted, upsellValue, items, restaurantId, tableNumber }) {
-    if (!twilioClient || !TWILIO_FROM || !TWILIO_TO) {
-        console.warn(`[Twilio] SKIPPED for order ${orderId} — twilioClient: ${!!twilioClient}, FROM: ${TWILIO_FROM}, TO: ${TWILIO_TO}`);
-        return;
-    }
-
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
-
-    // Resolve restaurant name from config
-    const restaurantConfig = restaurants[restaurantId];
-    const restaurantName = restaurantConfig ? restaurantConfig.name : (restaurantId || "Not Specified");
-
-    // Format items list
-    let itemList = "(not available)";
-    if (Array.isArray(items) && items.length > 0) {
-        const grouped = {};
-        for (const item of items) {
-            const name = item.name || "Unknown";
-            const price = item.price || "";
-            if (grouped[name]) {
-                grouped[name].qty += 1;
-            } else {
-                grouped[name] = { qty: 1, price };
-            }
-        }
-        itemList = Object.entries(grouped)
-            .map(([name, { qty, price }]) => `\u2022 ${name} \u00d7${qty} \u2014 ${price}`)
-            .join("\n");
-    }
-
-    // Upsell line
-    const upsellLine = upsellAccepted
-        ? `Upsell Added: Yes (+\u20b9${parseFloat(upsellValue || 0).toFixed(2)})`
-        : `Upsell Added: No`;
-
-    const message = [
-        `\ud83c\udd95 New Order`,
-        ``,
-        `Restaurant: ${restaurantName}`,
-        `Table: ${tableNumber || "Not Specified"}`,
-        ``,
-        `Items:`,
-        itemList,
-        ``,
-        `Total: \u20b9${parseFloat(totalValue).toFixed(2)}`,
-        upsellLine,
-        ``,
-        `Time: ${timeStr}`,
-    ].join("\n");
-
-    console.log(`[Twilio] Sending WhatsApp for order ${orderId}...`);
-    console.log(`[Twilio] FROM: ${TWILIO_FROM}, TO: ${TWILIO_TO}`);
-
+// --- Admin Auth ---
+app.post("/api/admin/login", async (req, res) => {
+    const { email, password } = req.body;
+    console.log(`[AdminLogin] Attempt for: ${email}`);
     try {
-        const result = await twilioClient.messages.create({
-            from: TWILIO_FROM,
-            to: TWILIO_TO,
-            body: message,
-        });
-        console.log(`[Twilio] ✅ WhatsApp sent for order ${orderId}`);
-        console.log(`[Twilio] SID: ${result.sid}, Status: ${result.status}`);
-    } catch (err) {
-        console.error(`[Twilio] ❌ WhatsApp FAILED for order ${orderId}`);
-        console.error(`[Twilio] Error: ${err.message}`);
-        console.error(`[Twilio] Code: ${err.code}, Status: ${err.status}`);
-        console.error(`[Twilio] More Info: ${err.moreInfo || "N/A"}`);
-        // Never throw — order flow must not be affected
-    }
-}
-
-// --- Routes ---
-
-/**
- * GET /api/restaurant/:id
- * Returns restaurant config (name, maxTables) or 404.
- */
-app.get("/api/restaurant/:id", (req, res) => {
-    const config = restaurants[req.params.id];
-    if (!config) {
-        return res.status(404).json({ error: "Restaurant not found" });
-    }
-    res.json({ name: config.name, maxTables: config.maxTables });
-});
-
-/**
- * GET /api/:slug/menu
- * Returns menu items for a restaurant identified by slug.
- */
-app.get("/api/:slug/menu", async (req, res) => {
-    try {
-        const slug = req.params.slug;
-
-        // Look up restaurant by slug
-        const restaurantResult = await pool.query(
-            "SELECT id FROM restaurants WHERE domain = $1",
-            [slug]
+        const result = await pool.query(
+            "SELECT a.*, r.domain as slug FROM admins a JOIN restaurants r ON a.restaurant_id = r.id WHERE a.email = $1",
+            [email]
         );
-
-        if (restaurantResult.rows.length === 0) {
-            return res.status(404).json({ error: "Restaurant not found" });
+        
+        if (result.rows.length === 0) {
+            console.log(`[AdminLogin] FAILED: No admin/restaurant record for ${email}`);
+            return res.status(401).json({ error: "Invalid credentials" });
         }
 
-        const restaurant_id = restaurantResult.rows[0].id;
+        const admin = result.rows[0];
+        const valid = await bcrypt.compare(password, admin.password_hash);
+        if (!valid) {
+            console.log(`[AdminLogin] FAILED: Password mismatch for ${email}`);
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
 
-        // Fetch available menu items
-        const menuResult = await pool.query(
-            `SELECT id, name, description, price, category, image_url
-             FROM menus
-             WHERE restaurant_id = $1 AND is_available = true
-             ORDER BY category, name`,
+        console.log(`[AdminLogin] SUCCESS: ${email} logged in for slug: ${admin.slug}`);
+        const token = jwt.sign({ id: admin.id, restaurant_id: admin.restaurant_id, slug: admin.slug }, JWT_SECRET, { expiresIn: "24h" });
+        res.json({ token, admin: { email: admin.email, slug: admin.slug } });
+    } catch (err) {
+        console.error(`[AdminLogin] Error: ${err.message}`);
+        res.status(500).json({ error: "Login failed" });
+    }
+});
+
+// --- Admin Analytics ---
+app.get("/api/admin/:slug/analytics", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+
+    try {
+        const restaurant_id = req.admin.restaurant_id;
+
+        const orderStats = await pool.query(
+            "SELECT COUNT(*) as total_orders, COALESCE(SUM(total), 0) as total_revenue FROM orders WHERE restaurant_id = $1",
             [restaurant_id]
         );
 
-        res.json(menuResult.rows);
-    } catch (error) {
-        console.error("Menu fetch failed:", error);
-        res.status(500).json({ error: "Internal server error" });
+        const upsellShown = await pool.query(
+            "SELECT COUNT(*) as count FROM upsell_events WHERE restaurant_slug = $1 AND event_type = 'shown'",
+            [slug]
+        );
+        const upsellAccepted = await pool.query(
+            "SELECT COUNT(*) as count, COALESCE(SUM(upsell_value), 0) as revenue FROM upsell_events WHERE restaurant_slug = $1 AND event_type = 'accepted'",
+            [slug]
+        );
+
+        const topUpsells = await pool.query(
+            `SELECT m.name, COUNT(*) as count, SUM(u.upsell_value) as revenue 
+             FROM upsell_events u 
+             JOIN menus m ON u.item_id = m.id 
+             WHERE u.restaurant_slug = $1 AND u.event_type = 'accepted'
+             GROUP BY m.name ORDER BY count DESC LIMIT 5`,
+            [slug]
+        );
+
+        const stats = orderStats.rows[0];
+        const shownCount = parseInt(upsellShown.rows[0].count);
+        const acceptedCount = parseInt(upsellAccepted.rows[0].count);
+        const upsellRevenue = parseFloat(upsellAccepted.rows[0].revenue);
+        const totalRevenue = parseFloat(stats.total_revenue);
+        const totalOrders = parseInt(stats.total_orders);
+
+        res.json({
+            totalRevenue,
+            totalOrders,
+            aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
+            upsellConversionRate: shownCount > 0 ? (acceptedCount / shownCount) * 100 : 0,
+            upsellRevenue,
+            revenueIncreasePercent: totalRevenue > 0 ? (upsellRevenue / (totalRevenue - upsellRevenue)) * 100 : 0,
+            topUpsellItems: topUpsells.rows,
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch analytics" });
     }
 });
 
-/**
- * POST /api/upsell-shown
- * Increments the upsell shown counter.
- */
-app.post("/api/upsell-shown", (req, res) => {
-    analytics.upsellShown++;
-    // console.log("[Analytics] Upsell shown");
-    res.status(200).send("OK");
+// --- Admin Orders ---
+app.get("/api/admin/:slug/orders", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+
+    try {
+        const result = await pool.query(
+            "SELECT * FROM orders WHERE restaurant_id = $1 ORDER BY created_at DESC",
+            [req.admin.restaurant_id]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch orders" });
+    }
 });
 
-/**
- * POST /api/upsell-event
- * Logs upsell analytics events (shown, accepted, rejected) to PostgreSQL.
- * Fire-and-forget: errors are logged but never block UI or order flow.
- */
-app.post("/api/upsell-event", async (req, res) => {
+app.put("/api/admin/:slug/orders/:id/status", authenticateAdmin, async (req, res) => {
+    const { status } = req.body;
     try {
-        const {
-            restaurant_slug,
-            table_number,
-            item_id,
-            cart_value,
-            upsell_value,
-            event_type,
-            gpt_word_count,
-            upsell_reason
-        } = req.body;
-
-        console.log(`[UpsellEvent] ${event_type} item:${item_id}`);
-
         await pool.query(
-            `INSERT INTO upsell_events
-            (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [
-                restaurant_slug,
-                table_number,
-                item_id,
-                cart_value,
-                upsell_value,
-                event_type,
-                gpt_word_count,
-                upsell_reason
-            ]
+            "UPDATE orders SET status = $1 WHERE id = $2 AND restaurant_id = $3",
+            [status, req.params.id, req.admin.restaurant_id]
         );
-
         res.json({ success: true });
     } catch (err) {
-        console.error("Upsell event logging error:", err);
+        res.status(500).json({ error: "Failed to update order status" });
+    }
+});
+
+// --- Admin Menu Management ---
+app.post("/api/admin/:slug/menu", authenticateAdmin, async (req, res) => {
+    const { name, description, price, category, image_url } = req.body;
+    try {
+        const result = await pool.query(
+            "INSERT INTO menus (restaurant_id, name, description, price, category, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+            [req.admin.restaurant_id, name, description, price, category, image_url]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to add menu item" });
+    }
+});
+
+app.put("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
+    const { name, description, price, category, image_url, is_available } = req.body;
+    try {
+        const result = await pool.query(
+            `UPDATE menus SET name=$1, description=$2, price=$3, category=$4, image_url=$5, is_available=$6 
+             WHERE id=$7 AND restaurant_id=$8 RETURNING *`,
+            [name, description, price, category, image_url, is_available, req.params.id, req.admin.restaurant_id]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to update menu item" });
+    }
+});
+
+app.delete("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
+    try {
+        await pool.query("DELETE FROM menus WHERE id=$1 AND restaurant_id=$2", [req.params.id, req.admin.restaurant_id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to delete menu item" });
+    }
+});
+
+// --- OpenAI Client ---
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// --- Twilio Client ---
+let twilioClient = null;
+const TWILIO_FROM = process.env.TWILIO_WHATSAPP_NUMBER ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}` : null;
+const TWILIO_TO = process.env.RESTAURANT_WHATSAPP_NUMBER ? `whatsapp:${process.env.RESTAURANT_WHATSAPP_NUMBER}` : null;
+
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+}
+
+// --- Standard Client Routes ---
+app.get("/api/restaurant/:id", async (req, res) => {
+    const result = await pool.query("SELECT name, max_tables FROM restaurants WHERE domain = $1", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
+    res.json(result.rows[0]);
+});
+
+app.get("/api/:slug/menu", async (req, res) => {
+    try {
+        const resResult = await pool.query("SELECT id FROM restaurants WHERE domain = $1", [req.params.slug]);
+        if (resResult.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
+        const menuResult = await pool.query(
+            "SELECT id, name, description, price, category, image_url FROM menus WHERE restaurant_id = $1 AND is_available = true ORDER BY category, name",
+            [resResult.rows[0].id]
+        );
+        res.json(menuResult.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Menu fetch failed" });
+    }
+});
+
+app.post("/api/upsell-event", async (req, res) => {
+    try {
+        const { restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason } = req.body;
+        await pool.query(
+            "INSERT INTO upsell_events (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            [restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason]
+        );
+        res.json({ success: true });
+    } catch (err) {
         res.status(500).json({ error: "Failed to log upsell event" });
     }
 });
 
-/**
- * POST /api/:slug/order-complete
- * Multi-tenant: looks up restaurant by slug, inserts order into PostgreSQL.
- * Input: { items, subtotal, tax, total, pairing_accepted, customer_name, customer_phone,
- *          orderId, totalValue, upsellAccepted, upsellValue, tableNumber }
- */
 app.post("/api/:slug/order-complete", async (req, res) => {
     try {
-        const slug = req.params.slug;
-        console.log("Incoming order payload:", req.body);
-        console.log("Restaurant slug:", slug);
+        const resResult = await pool.query("SELECT id FROM restaurants WHERE domain = $1", [req.params.slug]);
+        if (resResult.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
 
-        // --- Look up restaurant by slug ---
-        const restaurantResult = await pool.query(
-            "SELECT id FROM restaurants WHERE domain = $1",
-            [slug]
-        );
-
-        if (restaurantResult.rows.length === 0) {
-            return res.status(404).json({ success: false, error: "Restaurant not found" });
-        }
-
-        const restaurant_id = restaurantResult.rows[0].id;
-
-        const {
-            items, subtotal, tax, total, pairing_accepted,
-            customer_name, customer_phone,
-            orderId, totalValue, upsellAccepted, upsellValue,
-        } = req.body;
-
-        // --- Validate customer info ---
-        if (!customer_name || !customer_phone) {
-            return res.status(400).json({ success: false, error: "customer_name and customer_phone are required" });
-        }
-
-        // --- PostgreSQL Insert ---
+        const { items, total, customer_name, customer_phone, upsellAccepted, upsellValue, tableNumber } = req.body;
         const result = await pool.query(
-            `INSERT INTO orders
-             (restaurant_id, items, subtotal, tax, total, pairing_accepted, customer_name, customer_phone)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING id`,
-            [
-                restaurant_id,
-                JSON.stringify(items),
-                subtotal,
-                tax,
-                total,
-                pairing_accepted,
-                customer_name,
-                customer_phone,
-            ]
+            "INSERT INTO orders (restaurant_id, items, total, customer_name, customer_phone, pairing_accepted) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted]
         );
 
-        const insertedId = result.rows[0].id;
-        console.log("Inserted order ID:", insertedId);
-
-        // --- Temporary Verification Query (remove after verification) ---
-        const verify = await pool.query(
-            "SELECT * FROM orders WHERE id = $1",
-            [insertedId]
-        );
-        console.log("Verification row:", verify.rows[0]);
-
-        // --- In-Memory Analytics (preserved) ---
-        const effectiveOrderId = orderId || insertedId;
-        const effectiveTotalValue = totalValue !== undefined ? parseFloat(totalValue) : parseFloat(total) || 0;
-        let validatedUpsellValue = parseFloat(upsellValue) || 0;
-        if (!upsellAccepted) {
-            validatedUpsellValue = 0;
-        }
-
-        analytics.orders.push({
-            orderId: effectiveOrderId,
-            totalValue: effectiveTotalValue,
-            upsellAccepted: !!upsellAccepted,
-            upsellValue: validatedUpsellValue,
-            timestamp: new Date(),
-        });
-
-        if (upsellAccepted) {
-            analytics.upsellAccepted++;
-        }
-
-        console.log(`[Analytics] Order logged: $${effectiveTotalValue} (Upsell: ${upsellAccepted}, Value: $${validatedUpsellValue})`);
-
-        // Fire-and-forget WhatsApp notification — never blocks response
-        sendOrderWhatsApp({
-            orderId: effectiveOrderId,
-            totalValue: effectiveTotalValue,
-            upsellAccepted: !!upsellAccepted,
-            upsellValue: validatedUpsellValue,
-            items: req.body.items || [],
-            restaurantId: slug,
-            tableNumber: req.body.tableNumber || "",
-        });
-
-        res.json({ success: true, orderId: insertedId });
-
-    } catch (error) {
-        console.error("Order insert failed:", error);
+        res.json({ success: true, orderId: result.rows[0].id });
+    } catch (err) {
         res.status(500).json({ success: false });
     }
 });
 
-/**
- * GET /api/analytics
- * Computes and returns revenue metrics (Internal & Sales layers).
- */
-app.get("/api/analytics", (req, res) => {
-    const totalOrders = analytics.orders.length;
-    const ordersWithUpsell = analytics.orders.filter(o => o.upsellAccepted);
-    const ordersWithoutUpsell = analytics.orders.filter(o => !o.upsellAccepted);
-
-    const sumTotal = (orders) => orders.reduce((sum, o) => sum + o.totalValue, 0);
-
-    const totalRevenue = sumTotal(analytics.orders);
-    const totalRevenueWith = sumTotal(ordersWithUpsell);
-    const totalRevenueWithout = sumTotal(ordersWithoutUpsell);
-
-    // --- Internal Metrics (Scientific) ---
-    const countWith = ordersWithUpsell.length;
-    const countWithout = ordersWithoutUpsell.length;
-
-    const AOV_with_upsell = countWith > 0 ? totalRevenueWith / countWith : 0;
-    const AOV_without_upsell = countWithout > 0 ? totalRevenueWithout / countWithout : 0;
-
-    // Revenue Lift % = (AOV_with - AOV_without) / AOV_without
-    // Can be negative.
-    let revenueLiftPercent = 0;
-    if (AOV_without_upsell > 0) {
-        revenueLiftPercent = (AOV_with_upsell - AOV_without_upsell) / AOV_without_upsell;
-    }
-
-    // --- Sales Metrics (Presentation) ---
-    const totalUpsellRevenue = analytics.orders.reduce((sum, o) => sum + o.upsellValue, 0);
-
-    // Average Upsell Value = Total Upsell Revenue / Count Accepted
-    const averageUpsellValue = analytics.upsellAccepted > 0
-        ? totalUpsellRevenue / analytics.upsellAccepted
-        : 0;
-
-    // Incremental Revenue % = (Total Upsell Revenue / Total Revenue) * 100
-    // Must be non-negative.
-    const incrementalRevenuePercent = totalRevenue > 0
-        ? (totalUpsellRevenue / totalRevenue) * 100
-        : 0;
-
-    const conversionRate = analytics.upsellShown > 0
-        ? analytics.upsellAccepted / analytics.upsellShown
-        : 0;
-
-    res.json({
-        internalMetrics: {
-            totalOrders,
-            upsellShown: analytics.upsellShown,
-            upsellAccepted: analytics.upsellAccepted,
-            conversionRate,
-            AOV_with_upsell,
-            AOV_without_upsell,
-            revenueLiftPercent,
-        },
-        salesMetrics: {
-            totalOrders,
-            upsellAccepted: analytics.upsellAccepted,
-            conversionRate,
-            totalUpsellRevenue,
-            averageUpsellValue,
-            incrementalRevenuePercent,
-            dataStatus: totalOrders >= 20 ? "ready" : "collecting",
-            dataMessage: totalOrders >= 20
-                ? null
-                : "Collecting sufficient data for reliable AOV comparison.",
-        }
-    });
-});
-
-/**
- * POST /api/rank-upsell
- *
- * Input JSON:
- *   { userName: string, cartItems: [], candidates: [] }
- * 
- * Returns:
- *   { item: {}, reason: string }
- *
- * AI decides which candidate to recommend AND generates a persuasive reason.
- * Fallback to deterministic (first candidate) on any failure.
- */
 app.post("/api/rank-upsell", async (req, res) => {
     try {
-        const { userName, cartItems, candidates } = req.body;
-
-        if (!candidates || !Array.isArray(candidates) || candidates.length === 0) {
-            return res.status(400).json({ error: "No candidates provided" });
-        }
-
-        const fallback = {
-            item: candidates[0],
-            reason: "A perfect addition to your order."
-        };
-
-        if (!process.env.OPENAI_API_KEY) {
-            return res.json(fallback);
-        }
-
-        console.log(`[RankUpsell] GPT ranking started for ${candidates.length} candidates`);
-
-        const cartSimplified = cartItems?.map(i => `${i.name} (₹${i.price})`).join(", ") || "Empty";
-        const candidatesSimplified = candidates.map(c => `ID: ${c.id} | ${c.name} | Category: ${c.category} | ₹${c.price}`).join("\n");
-
-        const systemPrompt = `You are generating ultra-concise upsell microcopy inside a premium restaurant ordering interface.
-
-Return JSON only:
-{
-  "itemId": number,
-  "reason": string
-}
-
-The reason must:
-- Be 8 to 15 words.
-- Be exactly one sentence.
-- Acknowledge the customer's current choice subtly.
-- Suggest the upsell enhances or elevates the experience.
-- Use subtle psychological persuasion (completion bias, indulgence, or refinement framing).
-- Avoid hype or aggressive selling.
-- Avoid generic phrases like "pairs well", "perfect addition", "goes perfectly", "rounds off", "completes your meal", or "finishing touch".
-- No exclamation marks.
-- No emojis.
-- No markdown.
-
-Vary the appreciation phrasing to avoid repetition.
-Imply subtle loss aversion by suggesting the experience feels more complete with this item.
-Avoid repetitive sentence structures.
-Keep it sharp, intelligent, refined, and persuasive without sounding pushy.`;
-
-        const userPrompt = `Items currently in cart: ${cartSimplified}
-
-Candidate items to recommend from:
-${candidatesSimplified}
-
-Return JSON selecting the best itemId and a reason following all constraints.`;
-
-        try {
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o",
-                temperature: 0.7,
-                max_tokens: 60,
-                response_format: { type: "json_object" },
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userPrompt }
-                ]
-            });
-
-            const content = completion.choices?.[0]?.message?.content?.trim();
-            if (!content) throw new Error("Empty response from GPT");
-
-            const parsed = JSON.parse(content);
-            const selectedItemId = parsed.itemId;
-            let reason = parsed.reason;
-
-            if (selectedItemId == null || !reason) {
-                throw new Error("Parsed JSON missing required keys");
-            }
-
-            // --- Safety clamp: enforce 8–15 word bounds ---
-            const wordCount = reason.trim().split(/\s+/).length;
-            if (wordCount > 15) {
-                // Trim to first 14 words
-                reason = reason.trim().split(/\s+/).slice(0, 14).join(" ") + ".";
-                console.log(`[RankUpsell] Reason trimmed from ${wordCount} to 14 words`);
-            } else if (wordCount < 8) {
-                // Too short — use controlled fallback template
-                reason = "Smart choice. This elevates the experience.";
-                console.log(`[RankUpsell] Reason too short (${wordCount} words) — using fallback template`);
-            }
-
-            const selectedCandidate = candidates.find(c => c.id === selectedItemId);
-
-            if (!selectedCandidate) {
-                throw new Error(`GPT selected invalid ID: ${selectedItemId}`);
-            }
-
-            console.log(`[RankUpsell] GPT success: Selected ${selectedCandidate.name} (${reason.trim().split(/\s+/).length} words)`);
-            return res.json({
-                item: selectedCandidate,
-                reason
-            });
-
-        } catch (apiError) {
-            console.error("[RankUpsell] GPT or JSON parsing failed:", apiError.message);
-            console.log("[RankUpsell] Using deterministic fallback");
-            return res.json(fallback);
-        }
-
+        const { candidates } = req.body;
+        if (!candidates || candidates.length === 0) return res.status(400).json({ error: "No candidates" });
+        res.json({ item: candidates[0], reason: "A perfect addition to your order." });
     } catch (err) {
-        console.error("[RankUpsell] Unexpected error:", err.message);
-        // Fallback on total failure
-        try {
-            return res.json({
-                item: req.body?.candidates?.[0],
-                reason: "A perfect addition to your order."
-            });
-        } catch {
-            return res.status(500).json({ error: "Internal server error" });
-        }
+        res.status(500).json({ error: "Internal error" });
     }
 });
 
-/**
- * POST /api/rephrase
- *
- * Input JSON:
- *   { baseItem: string, suggestedItem: string }
- *
- * Returns:
- *   { reason: string }
- *
- * Generates ONE short persuasive sentence (20–25 words max) using GPT-4o.
- * On OpenAI failure, returns a safe fallback (200). Never crashes order flow.
- */
-app.post("/api/rephrase", async (req, res) => {
-    const fallback = (base) => `Pairs well with your ${base}.`;
-
-    try {
-        const { baseItem, suggestedItem } = req.body;
-
-        // Validate required fields
-        if (!baseItem || !suggestedItem) {
-            return res.status(400).json({
-                error: "Missing required fields: baseItem, suggestedItem",
-            });
-        }
-
-        console.log("[Rephrase] GPT call started");
-
-        // Call OpenAI
-        try {
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o",
-                temperature: 0.7,
-                max_tokens: 40,
-                messages: [
-                    {
-                        role: "system",
-                        content: [
-                            "You are a restaurant menu assistant.",
-                            "Write ONE short persuasive sentence explaining why a customer should add the suggested item alongside their base item.",
-                            "Rules:",
-                            "- Maximum 20 to 25 words.",
-                            "- Be natural, specific, and non-generic.",
-                            "- Vary sentence structure every time — do not repeat the same opening or pattern.",
-                            "- No markdown, no quotation marks, no emojis.",
-                            "- Return plain text only.",
-                        ].join(" "),
-                    },
-                    {
-                        role: "user",
-                        content: `Base item: ${baseItem}. Suggested item: ${suggestedItem}.`,
-                    },
-                ],
-            });
-
-            const reason = completion.choices?.[0]?.message?.content?.trim();
-
-            if (reason) {
-                console.log("[Rephrase] GPT success");
-                return res.json({ reason });
-            }
-
-            // No content from API — fallback
-            console.warn("[Rephrase] Empty response — GPT fallback used");
-            return res.json({ reason: fallback(baseItem) });
-        } catch (apiError) {
-            console.error("[Rephrase] OpenAI API error:", apiError.message);
-            console.log("[Rephrase] GPT fallback used");
-            // Return fallback with 200 — never crash
-            return res.json({ reason: fallback(baseItem) });
-        }
-    } catch (err) {
-        console.error("[Rephrase] Unexpected error:", err.message);
-        return res.status(500).json({ error: "Internal server error" });
-    }
-});
-
-// --- Start ---
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
