@@ -78,7 +78,7 @@ export async function trackOrderComplete(
 
 // --- Admin API ---
 
-const getAuthHeader = () => {
+const getAuthHeader = (): Record<string, string> => {
     const token = localStorage.getItem("admin_token");
     return token ? { "Authorization": `Bearer ${token}` } : {};
 };
@@ -115,7 +115,10 @@ export async function fetchAdminOrders(slug: string) {
 export async function updateOrderStatus(slug: string, orderId: number, status: string) {
     const res = await fetch(`${API_BASE}/api/admin/${slug}/orders/${orderId}/status`, {
         method: "PUT",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
         body: JSON.stringify({ status })
     });
     return res.ok;
@@ -124,7 +127,10 @@ export async function updateOrderStatus(slug: string, orderId: number, status: s
 export async function addMenuItem(slug: string, item: any) {
     const res = await fetch(`${API_BASE}/api/admin/${slug}/menu`, {
         method: "POST",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
         body: JSON.stringify(item)
     });
     return res.json();
@@ -133,7 +139,10 @@ export async function addMenuItem(slug: string, item: any) {
 export async function updateMenuItem(slug: string, id: number, item: any) {
     const res = await fetch(`${API_BASE}/api/admin/${slug}/menu/${id}`, {
         method: "PUT",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
         body: JSON.stringify(item)
     });
     return res.json();
