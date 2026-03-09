@@ -294,8 +294,8 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         {/* Recommendation Section — shimmer while GPT loads, final card when resolved */}
                         {(upsellData || upsellLoading) && (
                             <div className="border-t border-dashed border-gray-200 pt-6">
-                                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
-                                    CHEF'S RECOMMENDATION FOR YOU
+                                <h3 className="text-sm font-bold text-dark/70 mb-4 font-body">
+                                    Most guests pair their {selectedItem.name.toLowerCase()} with this
                                 </h3>
                                 <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
                                     <div className="flex items-start justify-between mb-2">
