@@ -81,7 +81,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setUpsellLoading(true);
 
         // Single GPT call — POST /api/rank-upsell
-        rankCandidatesAI([candidate.item], state.cartItems).then(rec => {
+        rankCandidatesAI([candidate.item], [selectedItem, ...state.cartItems]).then(rec => {
             if (!isMounted.current) return;
 
             setUpsellLoading(false);
