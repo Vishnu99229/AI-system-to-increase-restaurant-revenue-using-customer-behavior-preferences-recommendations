@@ -612,8 +612,9 @@ function scoreCandidate(candidate, cartItems) {
  * Returns fallback text if GPT fails or times out.
  */
 async function generateUpsellReason(selectedItem, cartItems) {
-    const cartNames = cartItems.map(i => i.name).join(', ');
-    const fallbackReason = `Pairs perfectly with your ${cartNames.toLowerCase()}.`;
+    const cartItemName = cartItems?.[0]?.name || "order";
+    const cartNames = cartItems.map(i => i.name).filter(Boolean).join(', ') || "order";
+    const fallbackReason = `Pairs well with your ${cartItemName.toLowerCase()}.`;
 
     try {
         const controller = new AbortController();
@@ -626,11 +627,11 @@ async function generateUpsellReason(selectedItem, cartItems) {
             messages: [
                 {
                     role: "system",
-                    content: "You write short flavor-pairing descriptions for a restaurant menu. Explain why the recommended item complements the customer's order. 10–20 words max. No quotes. Natural, appetizing tone. Focus on taste, texture, or flavor contrast."
+                    content: "You write short flavor-pairing descriptions for a restaurant menu. Explain why the recommended item complements the customer's order. 12–20 words max. No quotes. Natural, appetizing tone. Focus on taste, texture, or flavor contrast. You must mention the customer's item by name."
                 },
                 {
                     role: "user",
-                    content: `Customer ordered: ${cartNames}. Recommended add-on: ${selectedItem.name} (${selectedItem.category || 'unknown'}). Write a short description explaining why this pairs well with their order.`
+                    content: `Customer ordered: ${cartNames}. Recommended add-on: ${selectedItem.name} (${selectedItem.category || 'menu item'}). Write a short 12–20 word sentence explaining why ${selectedItem.name} pairs well with ${cartItemName}.`
                 }
             ]
         }, { signal: controller.signal });
