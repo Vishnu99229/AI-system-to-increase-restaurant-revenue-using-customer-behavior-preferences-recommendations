@@ -5,6 +5,17 @@ import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
 
+const UPSELL_HEADERS = [
+    "Recommended by our chef for this order",
+    "Most loved pairing by our guests",
+    "A popular combination in our cafe",
+    "Most paired item with this order",
+    "Guests often add this with your selection",
+    "One of the most ordered pairings today",
+    "Our chef's favorite pairing for this item",
+    "Highly recommended with your order"
+];
+
 interface CheckoutProps {
     onBack: () => void;
 }
@@ -30,6 +41,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
     const [showUpsell, setShowUpsell] = useState(false);
     const [upsellLoading, setUpsellLoading] = useState(false);
+    const [upsellHeader, setUpsellHeader] = useState("");
 
     // Track if we've already evaluated the upsell decision (once per checkout mount)
     const hasEvaluatedUpsell = useRef(false);
@@ -97,6 +109,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
         // Show loading state immediately so the card renders with shimmer
         setUpsellLoading(true);
+        setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
 
         // Step 2: AI Ranking → POST /api/rank-upsell (single source of truth)
         // Backend handles GPT ranking + reason generation + fallback.
@@ -262,7 +275,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
                         <div className="mb-8 bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in shadow-[0_0_15px_rgba(244,196,48,0.15)]">
                             <div className="flex justify-between items-start mb-2">
                                 <h3 className="font-heading font-bold text-dark text-lg">
-                                    Popular with {cartItems[cartItems.length - 1]?.name.toLowerCase() || 'your'} orders
+                                    {upsellHeader}
                                 </h3>
                             </div>
 

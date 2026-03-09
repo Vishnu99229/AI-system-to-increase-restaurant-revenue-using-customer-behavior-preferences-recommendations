@@ -614,7 +614,15 @@ function scoreCandidate(candidate, cartItems) {
 async function generateUpsellReason(selectedItem, cartItems) {
     const cartItemName = cartItems?.[0]?.name || "order";
     const cartNames = cartItems.map(i => i.name).filter(Boolean).join(', ') || "order";
-    const fallbackReason = `Pairs well with your ${cartItemName.toLowerCase()}.`;
+    const candName = selectedItem.name;
+
+    const templates = [
+        `The ${candName} perfectly complements your ${cartItemName.toLowerCase()} with balanced flavors.`,
+        `Guests love pairing ${candName} with ${cartItemName.toLowerCase()} for a richer experience.`,
+        `The smooth taste of ${candName} enhances the flavors of your ${cartItemName.toLowerCase()}.`,
+        `This pairing of ${cartItemName.toLowerCase()} and ${candName} creates a satisfying flavor balance.`
+    ];
+    const fallbackReason = templates[Math.floor(Math.random() * templates.length)];
 
     try {
         const controller = new AbortController();
@@ -623,15 +631,15 @@ async function generateUpsellReason(selectedItem, cartItems) {
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             max_tokens: 40,
-            temperature: 0.7,
+            temperature: 0.8,
             messages: [
                 {
                     role: "system",
-                    content: "You write short flavor-pairing descriptions for a restaurant menu. Explain why the recommended item complements the customer's order. 12–20 words max. No quotes. Natural, appetizing tone. Focus on taste, texture, or flavor contrast. You must mention the customer's item by name."
+                    content: "You generate short, appetizing food pairing recommendations for a restaurant menu."
                 },
                 {
                     role: "user",
-                    content: `Customer ordered: ${cartNames}. Recommended add-on: ${selectedItem.name} (${selectedItem.category || 'menu item'}). Write a short 12–20 word sentence explaining why ${selectedItem.name} pairs well with ${cartItemName}.`
+                    content: `Generate a natural sounding food pairing description between 10 and 15 words explaining why ${selectedItem.name} complements the customer's ${cartItemName}. You must explicitly mention both item names.`
                 }
             ]
         }, { signal: controller.signal });
