@@ -147,7 +147,7 @@ export function getDeterministicUpsell(
     });
 
     const selected = candidates[0];
-    const reason = `Pairs great with your ${baseItem.name}.`;
+    const reason = `Complements your ${baseItem.name.toLowerCase()} perfectly.`;
 
     return { item: selected, reason };
 }

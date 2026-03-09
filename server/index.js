@@ -613,7 +613,7 @@ function scoreCandidate(candidate, cartItems) {
  */
 async function generateUpsellReason(selectedItem, cartItems) {
     const cartNames = cartItems.map(i => i.name).join(', ');
-    const fallbackReason = `A perfect addition to your ${cartNames}.`;
+    const fallbackReason = `Pairs perfectly with your ${cartNames.toLowerCase()}.`;
 
     try {
         const controller = new AbortController();
@@ -621,16 +621,16 @@ async function generateUpsellReason(selectedItem, cartItems) {
 
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            max_tokens: 30,
+            max_tokens: 40,
             temperature: 0.7,
             messages: [
                 {
                     role: "system",
-                    content: "You write short, persuasive one-line upsell descriptions for a restaurant. Max 12 words. No quotes. Casual and appetizing tone."
+                    content: "You write short flavor-pairing descriptions for a restaurant menu. Explain why the recommended item complements the customer's order. 10–20 words max. No quotes. Natural, appetizing tone. Focus on taste, texture, or flavor contrast."
                 },
                 {
                     role: "user",
-                    content: `Customer ordered: ${cartNames}. Suggest why they should add: ${selectedItem.name}. Category: ${selectedItem.category || 'unknown'}.`
+                    content: `Customer ordered: ${cartNames}. Recommended add-on: ${selectedItem.name} (${selectedItem.category || 'unknown'}). Write a short description explaining why this pairs well with their order.`
                 }
             ]
         }, { signal: controller.signal });

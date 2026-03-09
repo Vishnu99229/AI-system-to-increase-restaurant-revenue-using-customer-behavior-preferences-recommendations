@@ -261,7 +261,9 @@ export default function Checkout({ onBack }: CheckoutProps) {
                     {(showUpsell || upsellLoading) && (
                         <div className="mb-8 bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in shadow-[0_0_15px_rgba(244,196,48,0.15)]">
                             <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-heading font-bold text-dark text-lg">You might also enjoy</h3>
+                                <h3 className="font-heading font-bold text-dark text-lg">
+                                    Popular with {cartItems[cartItems.length - 1]?.name.toLowerCase() || 'your'} orders
+                                </h3>
                             </div>
 
                             {upsellLoading ? (
