@@ -5,6 +5,17 @@ import type { Item, Recommendation } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 import { Button } from "../components/Button";
 
+const UPSELL_HEADERS = [
+    "Recommended by our chef for this order",
+    "Most loved pairing by our guests",
+    "A popular combination in our cafe",
+    "Most paired item with this order",
+    "Guests often add this with your selection",
+    "One of the most ordered pairings today",
+    "Our chef's favorite pairing for this item",
+    "Highly recommended with your order"
+];
+
 interface MenuProps {
     onBack: () => void;
     onViewCart: () => void;
@@ -26,6 +37,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     // Single GPT recommendation state — shimmer while loading, final reason when resolved
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
     const [upsellLoading, setUpsellLoading] = useState(false);
+    const [upsellHeader, setUpsellHeader] = useState("");
 
     // Safety guard: prevent ranking being called twice for the same item
     const rankCalledFor = useRef<number | null>(null);
@@ -79,6 +91,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
         // Show shimmer immediately
         setUpsellLoading(true);
+        setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
 
         // Single GPT call — POST /api/rank-upsell
         rankCandidatesAI([candidate.item], [selectedItem, ...state.cartItems]).then(rec => {
@@ -295,7 +308,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         {(upsellData || upsellLoading) && (
                             <div className="border-t border-dashed border-gray-200 pt-6">
                                 <h3 className="text-sm font-bold text-dark/70 mb-4 font-body">
-                                    Most guests pair their {selectedItem.name.toLowerCase()} with this
+                                    {upsellHeader}
                                 </h3>
                                 <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
                                     <div className="flex items-start justify-between mb-2">
