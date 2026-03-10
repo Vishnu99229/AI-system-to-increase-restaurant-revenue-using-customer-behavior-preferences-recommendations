@@ -1,0 +1,163 @@
+const { OpenAI } = require("openai");
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Track the last recommended item globally to prevent repetitive suggestions
+let lastRecommendedItemName = null;
+
+/**
+ * Uses GPT to select the best complementary upsell item.
+ *
+ * @param {Object[]} candidates - Items GPT is allowed to recommend
+ * @param {Object[]} cartItems  - The customer's current cart items
+ * @param {Object[]} fullMenu   - The entire available menu
+ * @returns {Object} { item, reason, copy }
+ */
+async function generateUpsell(candidates, cartItems, fullMenu = []) {
+    const primaryItem = cartItems?.[0] || {};
+
+    // 1. Candidate Filtering & Explicit Blocking
+    // - Not in cart (handled by index.js before calling this)
+    // - Not in same category (handled by index.js before calling this)
+    // - Available (handled by index.js before calling this)
+    // - AND NOT the last recommended item (to prevent repetitive defaults like Vanilla Ice Cream)
+    let filteredCandidates = candidates;
+    if (lastRecommendedItemName) {
+        filteredCandidates = candidates.filter(
+            c => c.name.toLowerCase() !== lastRecommendedItemName.toLowerCase()
+        );
+    }
+
+    // If we blocked the last one and now we have nothing, fall back to the original candidates
+    if (filteredCandidates.length === 0 && candidates.length > 0) {
+         filteredCandidates = candidates;
+    } else if (filteredCandidates.length === 0) {
+        throw new Error("No candidates available for recommendation.");
+    }
+
+    // 2. Format Context and Candidates for GPT
+    const menuContext = (fullMenu.length > 0 ? fullMenu : filteredCandidates).map(i =>
+        `* ${i.name} | category: ${i.category || 'N/A'} | description: ${i.description || 'N/A'} | price: ₹${i.price}`
+    ).join('\n');
+
+    const candidateList = filteredCandidates.map((c, idx) =>
+        `${idx + 1}. Name: ${c.name} | Description: ${c.description || 'N/A'} | Category: ${c.category || 'N/A'} | Price: ₹${c.price}`
+    ).join('\n');
+
+    // 3. Fallback Setup
+    const fallbackIndex = Math.floor(Math.random() * filteredCandidates.length);
+    const fallbackItem = filteredCandidates[fallbackIndex];
+    const fallbackResult = {
+         item: fallbackItem,
+         reason: `${fallbackItem.name} makes a great addition to your order.`,
+         copy: `Add ${fallbackItem.name} to complete your meal!`
+    };
+
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+
+        // 4. GPT Prompt Construction
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            max_tokens: 150,
+            temperature: 0.7,
+            messages: [
+                {
+                    role: "system",
+                    content: `You are a restaurant assistant who suggests complementary items that naturally complete a meal.
+
+Analyze the ordered item's flavor profile, meal context, and typical restaurant pairings.
+
+Choose ONE item from the allowed recommendation list that best complements the ordered item.
+
+Rules:
+* Do not repeat the same recommendation across multiple items unless it is clearly the best pairing.
+* Avoid defaulting to any single item such as vanilla ice cream or fries.
+* Prefer pairings that improve the overall dining experience.
+
+Output Format:
+Return structured JSON exactly in this format:
+{
+  "recommended_item": "<exact item name>",
+  "reason": "<clear explanation of why this pairing makes sense>",
+  "upsell_copy": "<short friendly suggestion encouraging the pairing>"
+}`
+                },
+                {
+                    role: "user",
+                    content: `Customer ordered item
+Name: ${primaryItem.name || 'Unknown'}
+Description: ${primaryItem.description || 'N/A'}
+Category: ${primaryItem.category || 'N/A'}
+
+Full menu (context only):
+${menuContext}
+
+Allowed recommendation items:
+${candidateList}
+
+Provide the response in JSON.`
+                }
+            ],
+            response_format: { type: "json_object" }
+        }, { signal: controller.signal });
+
+        clearTimeout(timeout);
+
+        const raw = completion.choices?.[0]?.message?.content?.trim();
+        console.log(`[aiUpsellEngine] GPT raw response: ${raw}`);
+
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            console.error("[aiUpsellEngine] Failed to parse GPT response as JSON:", raw);
+            return fallbackResult;
+        }
+
+        const recommendedName = parsed.recommended_item?.trim();
+        const reason = parsed.reason?.trim();
+        const copy = parsed.upsell_copy?.trim();
+
+        // 5. Backend Validation
+        if (recommendedName && reason && copy) {
+            // match the item name against the candidate list
+            const matchedItem = filteredCandidates.find(
+                c => c.name.toLowerCase() === recommendedName.toLowerCase()
+            );
+
+            if (matchedItem) {
+                console.log(`[aiUpsellEngine] GPT successfully picked: ${matchedItem.name}`);
+                
+                // Track last recommended item
+                lastRecommendedItemName = matchedItem.name;
+                
+                return { item: matchedItem, reason, copy };
+            } else {
+                 console.warn(`[aiUpsellEngine] GPT recommended missing item name "${recommendedName}". Falling back.`);
+            }
+        } else {
+             console.warn("[aiUpsellEngine] GPT response missing required fields. Falling back.");
+        }
+
+        // Fallback if not matched or missing fields
+        // Update track even on fallback to ensure variety
+        lastRecommendedItemName = fallbackItem.name;
+        return fallbackResult;
+
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            console.warn("[aiUpsellEngine] GPT timed out. Falling back.");
+        } else {
+            console.warn("[aiUpsellEngine] GPT error:", err.message);
+        }
+        
+        lastRecommendedItemName = fallbackItem.name;
+        return fallbackResult;
+    }
+}
+
+module.exports = {
+    generateUpsell
+};

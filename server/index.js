@@ -350,6 +350,7 @@ app.delete("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
 
 // --- OpenAI Client ---
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const { generateUpsell } = require("./aiUpsellEngine");
 
 // --- Twilio Client ---
 let twilioClient = null;
@@ -444,151 +445,6 @@ app.post("/api/:slug/order-complete", async (req, res) => {
 // AI-DRIVEN UPSELL PAIRING ENGINE
 // =============================================================================
 
-/**
- * Uses GPT to select the best complementary upsell item.
- * 
- * @param {Object[]} candidates - Items GPT is allowed to recommend (same-category excluded, available only)
- * @param {Object[]} cartItems  - The customer's current cart items
- * @param {Object[]} fullMenu   - The entire available menu, used only for GPT context/reasoning
- * Returns { item, reason }. Falls back to a random candidate with a generic reason on failure.
- */
-async function selectBestUpsell(candidates, cartItems, fullMenu = []) {
-    // Use the primary (first) cart item as the focus for pairing analysis
-    const primaryItem = cartItems?.[0] || {};
-
-    const cartItemsFormatted = cartItems.map(i =>
-        `- ${i.name} (${i.category || 'item'}, ₹${i.price})`
-    ).join('\n');
-
-    // Full menu context: let GPT see everything for richer reasoning
-    const menuContext = (fullMenu.length > 0 ? fullMenu : candidates).map(i =>
-        `* ${i.name} | category: ${i.category || 'N/A'} | description: ${i.description || 'N/A'} | price: ₹${i.price}`
-    ).join('\n');
-
-    // Recommendation pool: only items GPT may actually pick (different category, available)
-    const candidateList = candidates.map((c, idx) =>
-        `${idx + 1}. Name: ${c.name} | Description: ${c.description || 'N/A'} | Category: ${c.category || 'N/A'} | Price: ₹${c.price}`
-    ).join('\n');
-
-    const fallbackIndex = Math.floor(Math.random() * candidates.length);
-    const fallbackItem = candidates[fallbackIndex];
-    const fallbackReason = `${fallbackItem.name} makes a great addition to your order.`;
-
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-
-        const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            max_tokens: 120,
-            temperature: 0.7,
-            messages: [
-                {
-                    role: "system",
-                    content: `You are an expert restaurant upsell assistant who thinks like a thoughtful waiter.
-
-Your job is to recommend ONE item that naturally complements the specific item a customer has ordered.
-You are given the full menu for context, but you must only pick from the provided recommendation list.
-
-REASONING APPROACH
-Evaluate each candidate by considering:
-* Flavor profile — do the flavors complement or contrast well?
-* Temperature contrast — warm with cold, hot with iced?
-* Meal context — breakfast, lunch, snack, dessert, drink pairing?
-* Complementary textures — crispy with creamy, crunchy with smooth?
-* Common restaurant pairings — what would a great waiter suggest?
-
-Think carefully about the SPECIFIC item ordered — not just its category.
-
-EXAMPLE PAIRINGS (study these for style and variety)
-* Avocado Toast → Cappuccino — warm espresso balances the fresh, creamy avocado toast
-* Mushroom Omelette → Fresh Orange Juice — citrus refreshes the palate and complements savory eggs
-* French Fries → Garlic Aioli Dip — creamy garlic dip enhances the crispy fries experience
-* Pasta Alfredo → Garlic Bread — toasted garlic bread pairs naturally with creamy pasta
-* Chocolate Brownie → Vanilla Ice Cream — cold vanilla ice cream melts beautifully over warm brownie
-* Grilled Chicken Sandwich → Iced Lemon Tea — light citrus drink balances the richness of grilled chicken
-* Pancakes → Maple Latte — sweet maple notes complement fluffy breakfast pancakes
-* Veggie Burger → Sweet Potato Fries — sweet potato fries enhance the savory burger flavor
-* Berry Smoothie → Granola Parfait — crunchy granola adds texture to a refreshing smoothie
-* Cold Brew Coffee → Blueberry Muffin — slightly sweet muffin balances the bitterness of cold brew
-
-RULES
-* Analyze the specific ordered item and evaluate the full menu for context.
-* Choose ONE complementary item from the recommendation list only.
-* Do NOT recommend the same item for every ordered item — recommendations must vary per item.
-* Avoid defaulting to any single item (e.g., vanilla ice cream) unless the pairing is truly the best match.
-* The recommendation must make culinary sense and feel natural in a restaurant context.
-
-PERSUASION GOAL
-The recommendation should subtly encourage the customer to add the suggested item by highlighting how it completes the meal or improves the experience.
-Tone: friendly, confident, natural, slightly persuasive — not overly salesy. Think thoughtful waiter, not billboard ad.
-
-VARIETY ENFORCEMENT
-If multiple items in the menu could pair well with the ordered item, prefer different recommendations across different ordered items.
-Avoid recommending the same item repeatedly for an entire category.
-Only repeat a recommendation if it is clearly the most logical pairing.
-
-Always respond ONLY in this exact JSON format with no extra text:
-{"recommended_item": "<exact name from the recommendation list>", "reason": "<clear explanation of why this item pairs well>", "upsell_copy": "<8-15 word persuasive sentence suggesting the pairing>"}`
-                },
-                {
-                    role: "user",
-                    content: `Customer ordered item:
-Name: ${primaryItem.name || 'Unknown'}
-Description: ${primaryItem.description || 'N/A'}
-Category: ${primaryItem.category || 'N/A'}
-
-Customer cart:
-${cartItemsFormatted}
-
-Full menu (for context and reasoning only — do NOT pick from here):
-${menuContext}
-
-Recommendation list (you MUST pick from this list only):
-${candidateList}
-
-Based on the specific item ordered and the full menu context, pick the ONE item from the recommendation list that best complements this order. Return JSON only.`
-                }
-            ]
-        }, { signal: controller.signal });
-
-        clearTimeout(timeout);
-
-        const raw = completion.choices?.[0]?.message?.content?.trim();
-        console.log(`[rank-upsell] GPT raw response: ${raw}`);
-
-        const parsed = JSON.parse(raw);
-        const recommendedName = parsed.recommended_item?.trim();
-        const reason = parsed.upsell_copy?.trim() || parsed.reason?.trim();
-
-        if (recommendedName && reason) {
-            // Match by name (case-insensitive) against the recommendation pool only
-            const matchedItem = candidates.find(
-                c => c.name.toLowerCase() === recommendedName.toLowerCase()
-            );
-
-            if (matchedItem) {
-                console.log(`[rank-upsell] GPT picked: ${matchedItem.name} — ${reason}`);
-                return { item: matchedItem, reason };
-            }
-
-            console.warn(`[rank-upsell] GPT returned unrecognised item name "${recommendedName}", using fallback`);
-        } else {
-            console.warn("[rank-upsell] GPT response missing fields, using fallback");
-        }
-
-        return { item: fallbackItem, reason: fallbackReason };
-
-    } catch (err) {
-        if (err.name === 'AbortError') {
-            console.warn("[rank-upsell] GPT timed out, using fallback");
-        } else {
-            console.warn("[rank-upsell] GPT error:", err.message);
-        }
-        return { item: fallbackItem, reason: fallbackReason };
-    }
-}
-
 // --- POST /api/rank-upsell ---
 // AI-driven upsell pairing engine with GPT selection and fallback.
 // Input:  { candidates: Item[], cartItems: Item[] }
@@ -676,7 +532,7 @@ app.post("/api/rank-upsell", async (req, res) => {
         // --- AI-driven selection: evaluate per cart item ---
         let finalUpsell = null;
         for (const cartItem of enrichedCartItems) {
-            const result = await selectBestUpsell(filteredCandidates, [cartItem], fullMenuContext);
+            const result = await generateUpsell(filteredCandidates, [cartItem], fullMenuContext);
             if (result && result.item) {
                 finalUpsell = result;
                 break;
@@ -685,7 +541,9 @@ app.post("/api/rank-upsell", async (req, res) => {
 
         if (finalUpsell) {
             console.log(`[rank-upsell] Winner: ${finalUpsell.item.name}`);
-            return res.json({ item: finalUpsell.item, reason: finalUpsell.reason });
+            // Provide BOTH reason and upsell_copy if the frontend starts using upsell_copy eventually. Currently, it expects `reason`, but we'll pack both safely.
+            const combinedReason = finalUpsell.copy || finalUpsell.reason; 
+            return res.json({ item: finalUpsell.item, reason: combinedReason });
         } else {
             throw new Error("No upsell generated from cart loop");
         }
