@@ -116,10 +116,16 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     useEffect(() => {
         if (upsellData && !upsellLoading && !hasTrackedCurrentModal.current) {
             hasTrackedCurrentModal.current = true;
-            trackUpsellShown();
+            trackUpsellShown({
+                restaurant_slug: state.restaurantId,
+                table_number: state.tableNumber || "",
+                item_id: upsellData.item.id,
+                cart_value: 0, // In menu up-sell we could compute cart if needed, omitted here
+                candidate_pool_size: upsellData.candidate_pool_size || 0
+            });
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
-    }, [upsellData, upsellLoading, dispatch]);
+    }, [upsellData, upsellLoading, dispatch, state.restaurantId, state.tableNumber]);
 
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);

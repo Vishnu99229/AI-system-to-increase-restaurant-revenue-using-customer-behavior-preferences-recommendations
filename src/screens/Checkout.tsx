@@ -145,12 +145,19 @@ export default function Checkout({ onBack }: CheckoutProps) {
         event_type: eventType,
         gpt_word_count: upsellData?.reason ? upsellData.reason.split(" ").length : 0,
         upsell_reason: upsellData?.reason || "",
+        candidate_pool_size: upsellData?.candidate_pool_size || 0,
     });
 
     // Track upsell shown event when it becomes visible (only after loading completes)
     useEffect(() => {
         if (showUpsell && !upsellLoading) {
-            trackUpsellShown();
+            trackUpsellShown({
+                restaurant_slug: state.restaurantId,
+                table_number: state.tableNumber || "",
+                item_id: upsellData?.item.id ?? 0,
+                cart_value: Math.round(subtotal),
+                candidate_pool_size: upsellData?.candidate_pool_size || 0
+            });
             trackUpsellEvent(buildUpsellEventPayload("shown"));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps

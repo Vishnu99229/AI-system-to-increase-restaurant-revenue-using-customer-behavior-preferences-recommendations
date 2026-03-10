@@ -13,6 +13,7 @@ export interface Item {
 export interface Recommendation {
     item: Item;
     reason: string;
+    candidate_pool_size?: number;
 }
 
 // --- Config ---
@@ -210,7 +211,8 @@ export async function rankCandidatesAI(
 
         return {
             item: data.item,
-            reason: data.reason
+            reason: data.reason,
+            candidate_pool_size: data.candidate_pool_size
         };
 
     } catch (error) {

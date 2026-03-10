@@ -97,6 +97,8 @@ const pool = new Pool({
                 created_at TIMESTAMP DEFAULT NOW()
             )
         `);
+        // Add candidate_pool_size to upsell_events
+        await pool.query(`ALTER TABLE upsell_events ADD COLUMN IF NOT EXISTS candidate_pool_size INTEGER`);
         console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events)");
 
         // --- Local Database Seeding ---
@@ -382,12 +384,14 @@ app.get("/api/:slug/menu", async (req, res) => {
     }
 });
 
+// --- POST /api/upsell-event ---
 app.post("/api/upsell-event", async (req, res) => {
     try {
-        const { restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason } = req.body;
+        const { restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason, candidate_pool_size } = req.body;
+
         await pool.query(
-            "INSERT INTO upsell_events (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-            [restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason]
+            "INSERT INTO upsell_events (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason, candidate_pool_size) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            [restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason, candidate_pool_size || null]
         );
         res.json({ success: true });
     } catch (err) {
@@ -408,12 +412,13 @@ app.post("/api/upsell-shown", async (req, res) => {
             cart_value = null,
             upsell_value = null,
             event_type = "shown",
-            upsell_reason = null
+            upsell_reason = null,
+            candidate_pool_size = null
         } = req.body || {};
 
         await pool.query(
-            "INSERT INTO upsell_events (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-            [restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, 0, upsell_reason]
+            "INSERT INTO upsell_events (restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, gpt_word_count, upsell_reason, candidate_pool_size) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            [restaurant_slug, table_number, item_id, cart_value, upsell_value, event_type, 0, upsell_reason, candidate_pool_size]
         );
         console.log("[upsell-shown] Event logged successfully");
         res.json({ success: true });
@@ -508,31 +513,54 @@ app.post("/api/rank-upsell", async (req, res) => {
         }
 
         // --- Filter Candidates ---
-        // Full menu for GPT context = all available items (enrichedCandidates)
-        // Recommendation pool = exclude: unavailable, same cart item IDs, same category as primary cart item
-        const primaryCartItemIds = new Set(enrichedCartItems.map(i => i.id));
-        const primaryCategory = (enrichedCartItems[0]?.category || '').toLowerCase();
+        const primaryItemIds = new Set(enrichedCartItems.map(i => i.id));
+        const primaryItem = enrichedCartItems[0] || {};
 
-        const filteredCandidates = enrichedCandidates.filter(c =>
+        // 1. Initial safe filtering
+        let validItems = enrichedCandidates.filter(c =>
             c.is_available !== false &&
-            !primaryCartItemIds.has(c.id) &&
-            (c.category || '').toLowerCase() !== primaryCategory
+            !primaryItemIds.has(c.id) &&
+            c.id !== primaryItem.id
         );
 
-        if (filteredCandidates.length === 0) {
+        // 2. Enforce category diversity (max 2 items per category)
+        const categoryCounts = {};
+        const diverseCandidates = [];
+
+        for (const item of validItems) {
+            const cat = (item.category || 'Other').toLowerCase();
+            categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+            
+            if (categoryCounts[cat] <= 2) {
+                diverseCandidates.push(item);
+            }
+        }
+
+        if (diverseCandidates.length === 0) {
             console.log("[rank-upsell] No valid candidates after filtering");
             return res.status(400).json({ error: "No valid candidates" });
         }
 
+        // 3. Randomize candidate order
+        let finalCandidates = diverseCandidates
+            .map(x => ({ x, r: Math.random() }))
+            .sort((a, b) => a.r - b.r)
+            .map(x => x.x);
+
+        // 4. Limit to maximum candidate count (10)
+        finalCandidates = finalCandidates.slice(0, 10);
+
+        // 5. Add debugging logs
+        console.log(`[rank-upsell] candidate pool size: ${finalCandidates.length}`);
+        console.log(`[rank-upsell] candidates: ${JSON.stringify(finalCandidates.map(c => c.name))}`);
+
         // Full menu context passed separately so GPT can reason with complete landscape
         const fullMenuContext = enrichedCandidates.filter(c => c.is_available !== false);
-
-        console.log(`[rank-upsell] ${filteredCandidates.length} recommendation candidates, ${fullMenuContext.length} items in full menu context`);
 
         // --- AI-driven selection: evaluate per cart item ---
         let finalUpsell = null;
         for (const cartItem of enrichedCartItems) {
-            const result = await generateUpsell(filteredCandidates, [cartItem], fullMenuContext);
+            const result = await generateUpsell(finalCandidates, [cartItem], fullMenuContext);
             if (result && result.item) {
                 finalUpsell = result;
                 break;
@@ -541,9 +569,14 @@ app.post("/api/rank-upsell", async (req, res) => {
 
         if (finalUpsell) {
             console.log(`[rank-upsell] Winner: ${finalUpsell.item.name}`);
+
             // Provide BOTH reason and upsell_copy if the frontend starts using upsell_copy eventually. Currently, it expects `reason`, but we'll pack both safely.
             const combinedReason = finalUpsell.copy || finalUpsell.reason; 
-            return res.json({ item: finalUpsell.item, reason: combinedReason });
+            return res.json({ 
+                item: finalUpsell.item, 
+                reason: combinedReason,
+                candidate_pool_size: finalCandidates.length 
+            });
         } else {
             throw new Error("No upsell generated from cart loop");
         }

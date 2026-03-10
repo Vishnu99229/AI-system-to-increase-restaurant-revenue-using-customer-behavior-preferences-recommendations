@@ -36,13 +36,7 @@ async function generateUpsell(candidates, cartItems, fullMenu = []) {
     }
 
     // 2. Format Context and Candidates for GPT
-    const menuContext = (fullMenu.length > 0 ? fullMenu : filteredCandidates).map(i =>
-        `* ${i.name} | category: ${i.category || 'N/A'} | description: ${i.description || 'N/A'} | price: ₹${i.price}`
-    ).join('\n');
-
-    const candidateList = filteredCandidates.map((c, idx) =>
-        `${idx + 1}. Name: ${c.name} | Description: ${c.description || 'N/A'} | Category: ${c.category || 'N/A'} | Price: ₹${c.price}`
-    ).join('\n');
+    const candidateList = filteredCandidates.map(c => c.name).join('\n');
 
     // 3. Fallback Setup
     const fallbackIndex = Math.floor(Math.random() * filteredCandidates.length);
@@ -86,18 +80,16 @@ Return structured JSON exactly in this format:
                 },
                 {
                     role: "user",
-                    content: `Customer ordered item
-Name: ${primaryItem.name || 'Unknown'}
-Description: ${primaryItem.description || 'N/A'}
-Category: ${primaryItem.category || 'N/A'}
+                    content: `Primary item ordered:
+${primaryItem.name || 'Unknown'}
 
-Full menu (context only):
-${menuContext}
-
-Allowed recommendation items:
+Allowed recommendation items (choose exactly one):
 ${candidateList}
 
-Provide the response in JSON.`
+Choose the ONE item that best complements the primary item.
+Focus on taste pairing, meal timing, and balance.
+
+Return JSON:`
                 }
             ],
             response_format: { type: "json_object" }

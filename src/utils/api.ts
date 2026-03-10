@@ -24,9 +24,19 @@ export async function fetchMenu(slug: string): Promise<Item[]> {
     }
 }
 
-export async function trackUpsellShown(): Promise<void> {
+export async function trackUpsellShown(payload?: {
+    restaurant_slug?: string;
+    table_number?: string;
+    item_id?: number;
+    cart_value?: number;
+    candidate_pool_size?: number;
+}): Promise<void> {
     try {
-        await fetch(`${API_BASE}/api/upsell-shown`, { method: "POST" });
+        await fetch(`${API_BASE}/api/upsell-shown`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload ? JSON.stringify(payload) : undefined
+        });
     } catch (error) {}
 }
 
@@ -39,6 +49,7 @@ export function trackUpsellEvent(params: {
     event_type: "shown" | "accepted" | "rejected";
     gpt_word_count: number;
     upsell_reason: string;
+    candidate_pool_size?: number;
 }): void {
     fetch(`${API_BASE}/api/upsell-event`, {
         method: "POST",
