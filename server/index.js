@@ -441,231 +441,94 @@ app.post("/api/:slug/order-complete", async (req, res) => {
 });
 
 // =============================================================================
-// DETERMINISTIC UPSELL SCORING ENGINE
+// AI-DRIVEN UPSELL PAIRING ENGINE
 // =============================================================================
 
 /**
- * Category pairing scores: Maps a cart item's category/sub_category keyword
- * to complementary candidate category/sub_category keywords.
- * Higher score = better pairing.
+ * Uses GPT to select the best complementary upsell item from candidates
+ * based on the customer's cart. Returns { item, reason }.
+ * Falls back to a random candidate with a generic reason on failure.
  */
-const CATEGORY_PAIR_SCORES = {
-    // Drinks pair with food
-    'coffee':  { 'pastry': 40, 'bakery': 35, 'dessert': 30, 'sandwich': 25, 'main': 20, 'side': 15 },
-    'beverage': { 'pastry': 35, 'bakery': 30, 'dessert': 30, 'sandwich': 25, 'main': 25, 'side': 20 },
-    'drink':   { 'pastry': 35, 'bakery': 30, 'dessert': 30, 'main': 25, 'side': 20 },
-    'tea':     { 'pastry': 40, 'bakery': 35, 'dessert': 25, 'sandwich': 20 },
-    'juice':   { 'pastry': 25, 'bakery': 20, 'sandwich': 25, 'side': 15 },
-    'shake':   { 'pastry': 20, 'bakery': 20, 'dessert': 15, 'side': 15 },
-    // Food pairs with drinks
-    'main':    { 'coffee': 25, 'beverage': 30, 'drink': 30, 'side': 35, 'dessert': 20 },
-    'sandwich':{ 'coffee': 35, 'beverage': 30, 'drink': 30, 'side': 25 },
-    'wrap':    { 'coffee': 30, 'beverage': 30, 'drink': 30, 'side': 25 },
-    'pizza':   { 'beverage': 35, 'drink': 35, 'side': 30, 'dessert': 20 },
-    'pasta':   { 'beverage': 30, 'drink': 30, 'side': 25, 'dessert': 20 },
-    'burger':  { 'beverage': 35, 'drink': 35, 'side': 40, 'shake': 25 },
-    'side':    { 'coffee': 20, 'beverage': 25, 'drink': 25, 'main': 15 },
-    // Desserts pair with drinks
-    'dessert': { 'coffee': 40, 'beverage': 30, 'drink': 30, 'tea': 25 },
-    'bakery':  { 'coffee': 40, 'beverage': 30, 'drink': 30, 'tea': 30 },
-    'pastry':  { 'coffee': 40, 'beverage': 30, 'drink': 30, 'tea': 30 },
-    'sweet':   { 'coffee': 35, 'beverage': 25, 'drink': 25, 'tea': 25 },
-    'cake':    { 'coffee': 40, 'beverage': 25, 'tea': 30 },
-    'ice-cream': { 'brownie': 20 },  // Limited pairings for ice cream
-};
+async function selectBestUpsell(candidates, cartItems) {
+    const cartSummary = cartItems.map(i => 
+        `"${i.name}" (${i.category || 'item'}, ₹${i.price})`
+    ).join(', ');
 
-/**
- * Anti-pairings: combinations that should be penalized.
- * Key = cart keyword, Value = array of candidate keywords to penalize.
- */
-const ANTI_PAIRINGS = {
-    'coffee':    ['coffee'],           // Don't recommend coffee with coffee
-    'drink':     ['drink'],            // Don't recommend drink with drink
-    'beverage':  ['beverage', 'drink'],
-    'tea':       ['tea', 'coffee'],    // Don't recommend tea with tea or coffee
-    'ice-cream': ['coffee', 'hot'],    // Don't recommend ice cream with hot drinks
-    'frozen':    ['coffee', 'hot'],
-    'dessert':   ['dessert'],          // Don't recommend dessert with dessert
-    'sweet':     ['sweet', 'dessert'], // Don't stack sweets
-    'main':      ['main'],            // Don't recommend main with main
-    'side':      ['side'],            // Don't recommend side with side
-};
+    const candidateList = candidates.map((c, idx) => 
+        `${idx + 1}. "${c.name}" — ${c.description || c.category || ''} — ₹${c.price}`
+    ).join('\n');
 
-/**
- * Tag affinity pairs: tags that indicate good pairings.
- * If a cart item and candidate share related tags, boost the score.
- */
-const TAG_AFFINITY = {
-    'coffee':    ['bakery', 'pastry', 'chocolate', 'sweet'],
-    'chocolate': ['coffee', 'bakery'],
-    'bakery':    ['coffee', 'tea', 'hot'],
-    'pastry':    ['coffee', 'tea'],
-    'breakfast': ['coffee', 'tea', 'juice'],
-    'savory':    ['drink', 'beverage', 'coffee', 'side'],
-    'main':      ['side', 'drink', 'beverage'],
-    'snack':     ['drink', 'beverage', 'coffee'],
-    'fried':     ['drink', 'beverage', 'shake'],
-};
-
-/**
- * Extracts searchable keywords from a candidate/cart item.
- * Combines lowercased category, sub_category, and tags.
- */
-function extractKeywords(item) {
-    const keywords = new Set();
-    if (item.category) keywords.add(item.category.toLowerCase());
-    if (item.sub_category) keywords.add(item.sub_category.toLowerCase());
-    if (Array.isArray(item.tags)) {
-        item.tags.forEach(t => keywords.add(t.toLowerCase()));
-    }
-    // Also extract keywords from the item name for fallback matching
-    if (item.name) {
-        const nameLower = item.name.toLowerCase();
-        for (const kw of ['coffee', 'tea', 'juice', 'shake', 'pizza', 'pasta', 'burger', 'wrap', 'sandwich', 'brownie', 'muffin', 'croissant', 'cake', 'ice cream', 'fries']) {
-            if (nameLower.includes(kw)) keywords.add(kw.replace(' ', '-'));
-        }
-    }
-    return keywords;
-}
-
-/**
- * Scores a candidate item against the cart items.
- * Returns a numeric score (higher = better pairing).
- */
-function scoreCandidate(candidate, cartItems) {
-    let score = 0;
-    const candidateKws = extractKeywords(candidate);
-
-    for (const cartItem of cartItems) {
-        const cartKws = extractKeywords(cartItem);
-
-        // --- Anti-pairing penalty (-100) ---
-        for (const ckw of cartKws) {
-            const antiTargets = ANTI_PAIRINGS[ckw];
-            if (antiTargets) {
-                for (const anti of antiTargets) {
-                    if (candidateKws.has(anti)) {
-                        score -= 100;
-                    }
-                }
-            }
-        }
-
-        // --- Same exact category penalty ---
-        if (candidate.category && cartItem.category &&
-            candidate.category.toLowerCase() === cartItem.category.toLowerCase()) {
-            score -= 50;
-        }
-
-        // --- Category pairing score (max 40) ---
-        let bestPairScore = 0;
-        for (const ckw of cartKws) {
-            const pairMap = CATEGORY_PAIR_SCORES[ckw];
-            if (pairMap) {
-                for (const candKw of candidateKws) {
-                    if (pairMap[candKw] && pairMap[candKw] > bestPairScore) {
-                        bestPairScore = pairMap[candKw];
-                    }
-                }
-            }
-        }
-        score += bestPairScore;
-
-        // --- Tag affinity score (up to 20) ---
-        let tagScore = 0;
-        for (const ckw of cartKws) {
-            const affinityTags = TAG_AFFINITY[ckw];
-            if (affinityTags) {
-                for (const at of affinityTags) {
-                    if (candidateKws.has(at)) {
-                        tagScore += 5;
-                    }
-                }
-            }
-        }
-        score += Math.min(tagScore, 20); // Cap tag affinity at 20
-    }
-
-    // --- Price proximity bonus (up to 10) ---
-    const parsePrice = (p) => parseFloat(String(p).replace(/[^0-9.]/g, '')) || 0;
-    const cartAvgPrice = cartItems.reduce((s, i) => s + parsePrice(i.price), 0) / (cartItems.length || 1);
-    const candidatePrice = parsePrice(candidate.price);
-    if (cartAvgPrice > 0) {
-        const ratio = candidatePrice / cartAvgPrice;
-        if (ratio >= 0.3 && ratio <= 1.5) {
-            score += 10; // Within a reasonable price range
-        } else if (ratio >= 0.2 && ratio <= 2.0) {
-            score += 5; // Somewhat close in price
-        }
-    }
-
-    // --- Popularity bonus ---
-    if (candidate.popular) {
-        score += 5;
-    }
-
-    return score;
-}
-
-/**
- * Generates a persuasive reason using GPT.
- * Returns fallback text if GPT fails or times out.
- */
-async function generateUpsellReason(selectedItem, cartItems) {
-    const cartItemName = cartItems?.[0]?.name || "order";
-    const cartNames = cartItems.map(i => i.name).filter(Boolean).join(', ') || "order";
-    const candName = selectedItem.name;
-
-    const templates = [
-        `The ${candName} perfectly complements your ${cartItemName.toLowerCase()} with balanced flavors.`,
-        `Guests love pairing ${candName} with ${cartItemName.toLowerCase()} for a richer experience.`,
-        `The smooth taste of ${candName} enhances the flavors of your ${cartItemName.toLowerCase()}.`,
-        `This pairing of ${cartItemName.toLowerCase()} and ${candName} creates a satisfying flavor balance.`
-    ];
-    const fallbackReason = templates[Math.floor(Math.random() * templates.length)];
+    const fallbackIndex = Math.floor(Math.random() * candidates.length);
+    const fallbackItem = candidates[fallbackIndex];
+    const fallbackReason = `${fallbackItem.name} makes a great addition to your order.`;
 
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout
+        const timeout = setTimeout(() => controller.abort(), 10000);
 
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            max_tokens: 40,
-            temperature: 0.8,
+            max_tokens: 80,
+            temperature: 0.7,
             messages: [
                 {
                     role: "system",
-                    content: "You generate short, appetizing food pairing recommendations for a restaurant menu."
+                    content: `You are a smart restaurant upsell assistant. 
+Your job is to pick the single best complementary item to recommend 
+to a customer based on what they are ordering. 
+Think about flavor balance, meal completeness, and natural food pairings.
+Never recommend the same category as what the customer already has.
+Always respond ONLY in this exact JSON format with no extra text:
+{"index": <number>, "reason": "<10-15 word reason mentioning both items>"}`
                 },
                 {
                     role: "user",
-                    content: `Generate a natural sounding food pairing description between 10 and 15 words explaining why ${selectedItem.name} complements the customer's ${cartItemName}. You must explicitly mention both item names.`
+                    content: `The customer is ordering: ${cartSummary}
+
+From the list below, pick the ONE item that best complements their order:
+${candidateList}
+
+Respond with the index number of the best pick and a short reason.`
                 }
             ]
         }, { signal: controller.signal });
 
         clearTimeout(timeout);
 
-        const reason = completion.choices?.[0]?.message?.content?.trim();
-        if (reason && reason.length > 0 && reason.length < 100) {
-            console.log(`[rank-upsell] GPT reason: "${reason}"`);
-            return reason;
+        const raw = completion.choices?.[0]?.message?.content?.trim();
+        console.log(`[rank-upsell] GPT raw response: ${raw}`);
+
+        const parsed = JSON.parse(raw);
+        const pickedIndex = parseInt(parsed.index) - 1; // convert to 0-based
+
+        if (
+            typeof pickedIndex === 'number' &&
+            pickedIndex >= 0 &&
+            pickedIndex < candidates.length &&
+            parsed.reason
+        ) {
+            console.log(`[rank-upsell] GPT picked: ${candidates[pickedIndex].name} — ${parsed.reason}`);
+            return {
+                item: candidates[pickedIndex],
+                reason: parsed.reason
+            };
         }
 
-        console.log("[rank-upsell] GPT returned empty/too-long, using fallback");
-        return fallbackReason;
+        console.warn("[rank-upsell] GPT returned invalid index, using fallback");
+        return { item: fallbackItem, reason: fallbackReason };
+
     } catch (err) {
         if (err.name === 'AbortError') {
-            console.warn("[rank-upsell] GPT timed out after 8s, using fallback");
+            console.warn("[rank-upsell] GPT timed out, using fallback");
         } else {
-            console.warn("[rank-upsell] GPT failed:", err.message, "— using fallback");
+            console.warn("[rank-upsell] GPT error:", err.message);
         }
-        return fallbackReason;
+        return { item: fallbackItem, reason: fallbackReason };
     }
 }
 
 // --- POST /api/rank-upsell ---
-// Deterministic scoring engine with optional GPT reason generation.
+// AI-driven upsell pairing engine with GPT selection and fallback.
 // Input:  { candidates: Item[], cartItems: Item[] }
 // Output: { item: Item, reason: string }
 app.post("/api/rank-upsell", async (req, res) => {
@@ -726,29 +589,10 @@ app.post("/api/rank-upsell", async (req, res) => {
             console.warn("[rank-upsell] Cart DB enrichment failed:", dbErr.message);
         }
 
-        // --- Score and rank ---
-        const scored = enrichedCandidates.map(candidate => ({
-            candidate,
-            score: scoreCandidate(candidate, enrichedCartItems)
-        }));
-
-        scored.sort((a, b) => b.score - a.score);
-
-        // Log scores for debugging
-        for (const s of scored) {
-            console.log(`[rank-upsell]   ${s.candidate.name}: score=${s.score}`);
-        }
-
-        const best = scored[0];
-        console.log(`[rank-upsell] Winner: ${best.candidate.name} (score: ${best.score})`);
-
-        // --- Generate reason (GPT with fallback) ---
-        const reason = await generateUpsellReason(best.candidate, enrichedCartItems);
-
-        res.json({
-            item: best.candidate,
-            reason
-        });
+        // --- AI-driven selection ---
+        const { item, reason } = await selectBestUpsell(enrichedCandidates, enrichedCartItems);
+        console.log(`[rank-upsell] Winner: ${item.name}`);
+        res.json({ item, reason });
     } catch (err) {
         console.error("[rank-upsell] Unexpected error:", err.message);
         // Emergency fallback: return first candidate with generic reason
