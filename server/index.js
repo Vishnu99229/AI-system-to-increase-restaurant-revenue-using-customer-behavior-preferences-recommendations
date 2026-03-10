@@ -445,17 +445,29 @@ app.post("/api/:slug/order-complete", async (req, res) => {
 // =============================================================================
 
 /**
- * Uses GPT to select the best complementary upsell item from candidates
- * based on the customer's cart. Returns { item, reason }.
- * Falls back to a random candidate with a generic reason on failure.
+ * Uses GPT to select the best complementary upsell item.
+ * 
+ * @param {Object[]} candidates - Items GPT is allowed to recommend (same-category excluded, available only)
+ * @param {Object[]} cartItems  - The customer's current cart items
+ * @param {Object[]} fullMenu   - The entire available menu, used only for GPT context/reasoning
+ * Returns { item, reason }. Falls back to a random candidate with a generic reason on failure.
  */
-async function selectBestUpsell(candidates, cartItems) {
-    const cartSummary = cartItems.map(i => 
-        `"${i.name}" (${i.category || 'item'}, ₹${i.price})`
-    ).join(', ');
+async function selectBestUpsell(candidates, cartItems, fullMenu = []) {
+    // Use the primary (first) cart item as the focus for pairing analysis
+    const primaryItem = cartItems?.[0] || {};
 
-    const candidateList = candidates.map((c, idx) => 
-        `${idx + 1}. "${c.name}" — ${c.description || c.category || ''} — ₹${c.price}`
+    const cartItemsFormatted = cartItems.map(i =>
+        `- ${i.name} (${i.category || 'item'}, ₹${i.price})`
+    ).join('\n');
+
+    // Full menu context: let GPT see everything for richer reasoning
+    const menuContext = (fullMenu.length > 0 ? fullMenu : candidates).map(i =>
+        `* ${i.name} | category: ${i.category || 'N/A'} | description: ${i.description || 'N/A'} | price: ₹${i.price}`
+    ).join('\n');
+
+    // Recommendation pool: only items GPT may actually pick (different category, available)
+    const candidateList = candidates.map((c, idx) =>
+        `${idx + 1}. Name: ${c.name} | Description: ${c.description || 'N/A'} | Category: ${c.category || 'N/A'} | Price: ₹${c.price}`
     ).join('\n');
 
     const fallbackIndex = Math.floor(Math.random() * candidates.length);
@@ -468,27 +480,52 @@ async function selectBestUpsell(candidates, cartItems) {
 
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            max_tokens: 80,
+            max_tokens: 120,
             temperature: 0.7,
             messages: [
                 {
                     role: "system",
-                    content: `You are a smart restaurant upsell assistant. 
-Your job is to pick the single best complementary item to recommend 
-to a customer based on what they are ordering. 
-Think about flavor balance, meal completeness, and natural food pairings.
-Never recommend the same category as what the customer already has.
+                    content: `You are an expert restaurant upsell assistant.
+
+Your job is to recommend ONE item that naturally complements the specific item a customer has ordered.
+You are given the full menu for context, but you must only pick from the provided recommendation list.
+
+Think carefully about the exact item ordered — not just its category.
+
+Examples of good pairing logic:
+* Warm dessert → vanilla ice cream
+* Toast / breakfast item → coffee or fresh juice
+* Spicy dish → cooling drink
+* Pasta or heavy food → light drink or bread side
+* Chocolate dessert → espresso or cappuccino
+
+RULES
+* Analyze the specific ordered item and evaluate the full menu for context.
+* Choose ONE complementary item from the recommendation list only.
+* Do NOT recommend the same item for every ordered item — recommendations must vary.
+* Avoid defaulting to vanilla ice cream or any single item unless the pairing is truly the best match.
+* The recommendation must make culinary sense and feel natural in a restaurant context.
+
 Always respond ONLY in this exact JSON format with no extra text:
-{"index": <number>, "reason": "<10-15 word reason mentioning both items>"}`
+{"recommended_item": "<exact name from the recommendation list>", "reason": "<clear explanation of why this item pairs well>", "upsell_copy": "<8-15 word persuasive sentence suggesting the pairing>"}`
                 },
                 {
                     role: "user",
-                    content: `The customer is ordering: ${cartSummary}
+                    content: `Customer cart:
+${cartItemsFormatted}
 
-From the list below, pick the ONE item that best complements their order:
+Primary item being evaluated:
+Name: ${primaryItem.name || 'Unknown'}
+Description: ${primaryItem.description || 'N/A'}
+Category: ${primaryItem.category || 'N/A'}
+
+Full menu (for context and reasoning only — do NOT pick from here):
+${menuContext}
+
+Recommendation list (you MUST pick from this list only):
 ${candidateList}
 
-Respond with the index number of the best pick and a short reason.`
+Pick the ONE item from the recommendation list that best complements the primary item based on the full menu context. Return JSON only.`
                 }
             ]
         }, { signal: controller.signal });
@@ -499,22 +536,25 @@ Respond with the index number of the best pick and a short reason.`
         console.log(`[rank-upsell] GPT raw response: ${raw}`);
 
         const parsed = JSON.parse(raw);
-        const pickedIndex = parseInt(parsed.index) - 1; // convert to 0-based
+        const recommendedName = parsed.recommended_item?.trim();
+        const reason = parsed.upsell_copy?.trim() || parsed.reason?.trim();
 
-        if (
-            typeof pickedIndex === 'number' &&
-            pickedIndex >= 0 &&
-            pickedIndex < candidates.length &&
-            parsed.reason
-        ) {
-            console.log(`[rank-upsell] GPT picked: ${candidates[pickedIndex].name} — ${parsed.reason}`);
-            return {
-                item: candidates[pickedIndex],
-                reason: parsed.reason
-            };
+        if (recommendedName && reason) {
+            // Match by name (case-insensitive) against the recommendation pool only
+            const matchedItem = candidates.find(
+                c => c.name.toLowerCase() === recommendedName.toLowerCase()
+            );
+
+            if (matchedItem) {
+                console.log(`[rank-upsell] GPT picked: ${matchedItem.name} — ${reason}`);
+                return { item: matchedItem, reason };
+            }
+
+            console.warn(`[rank-upsell] GPT returned unrecognised item name "${recommendedName}", using fallback`);
+        } else {
+            console.warn("[rank-upsell] GPT response missing fields, using fallback");
         }
 
-        console.warn("[rank-upsell] GPT returned invalid index, using fallback");
         return { item: fallbackItem, reason: fallbackReason };
 
     } catch (err) {
@@ -589,10 +629,44 @@ app.post("/api/rank-upsell", async (req, res) => {
             console.warn("[rank-upsell] Cart DB enrichment failed:", dbErr.message);
         }
 
-        // --- AI-driven selection ---
-        const { item, reason } = await selectBestUpsell(enrichedCandidates, enrichedCartItems);
-        console.log(`[rank-upsell] Winner: ${item.name}`);
-        res.json({ item, reason });
+        // --- Filter Candidates ---
+        // Full menu for GPT context = all available items (enrichedCandidates)
+        // Recommendation pool = exclude: unavailable, same cart item IDs, same category as primary cart item
+        const primaryCartItemIds = new Set(enrichedCartItems.map(i => i.id));
+        const primaryCategory = (enrichedCartItems[0]?.category || '').toLowerCase();
+
+        const filteredCandidates = enrichedCandidates.filter(c =>
+            c.is_available !== false &&
+            !primaryCartItemIds.has(c.id) &&
+            (c.category || '').toLowerCase() !== primaryCategory
+        );
+
+        if (filteredCandidates.length === 0) {
+            console.log("[rank-upsell] No valid candidates after filtering");
+            return res.status(400).json({ error: "No valid candidates" });
+        }
+
+        // Full menu context passed separately so GPT can reason with complete landscape
+        const fullMenuContext = enrichedCandidates.filter(c => c.is_available !== false);
+
+        console.log(`[rank-upsell] ${filteredCandidates.length} recommendation candidates, ${fullMenuContext.length} items in full menu context`);
+
+        // --- AI-driven selection: evaluate per cart item ---
+        let finalUpsell = null;
+        for (const cartItem of enrichedCartItems) {
+            const result = await selectBestUpsell(filteredCandidates, [cartItem], fullMenuContext);
+            if (result && result.item) {
+                finalUpsell = result;
+                break;
+            }
+        }
+
+        if (finalUpsell) {
+            console.log(`[rank-upsell] Winner: ${finalUpsell.item.name}`);
+            return res.json({ item: finalUpsell.item, reason: finalUpsell.reason });
+        } else {
+            throw new Error("No upsell generated from cart loop");
+        }
     } catch (err) {
         console.error("[rank-upsell] Unexpected error:", err.message);
         // Emergency fallback: return first candidate with generic reason
