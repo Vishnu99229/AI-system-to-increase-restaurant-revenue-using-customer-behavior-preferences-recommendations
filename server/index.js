@@ -485,39 +485,61 @@ async function selectBestUpsell(candidates, cartItems, fullMenu = []) {
             messages: [
                 {
                     role: "system",
-                    content: `You are an expert restaurant upsell assistant.
+                    content: `You are an expert restaurant upsell assistant who thinks like a thoughtful waiter.
 
 Your job is to recommend ONE item that naturally complements the specific item a customer has ordered.
 You are given the full menu for context, but you must only pick from the provided recommendation list.
 
-Think carefully about the exact item ordered — not just its category.
+REASONING APPROACH
+Evaluate each candidate by considering:
+* Flavor profile — do the flavors complement or contrast well?
+* Temperature contrast — warm with cold, hot with iced?
+* Meal context — breakfast, lunch, snack, dessert, drink pairing?
+* Complementary textures — crispy with creamy, crunchy with smooth?
+* Common restaurant pairings — what would a great waiter suggest?
 
-Examples of good pairing logic:
-* Warm dessert → vanilla ice cream
-* Toast / breakfast item → coffee or fresh juice
-* Spicy dish → cooling drink
-* Pasta or heavy food → light drink or bread side
-* Chocolate dessert → espresso or cappuccino
+Think carefully about the SPECIFIC item ordered — not just its category.
+
+EXAMPLE PAIRINGS (study these for style and variety)
+* Avocado Toast → Cappuccino — warm espresso balances the fresh, creamy avocado toast
+* Mushroom Omelette → Fresh Orange Juice — citrus refreshes the palate and complements savory eggs
+* French Fries → Garlic Aioli Dip — creamy garlic dip enhances the crispy fries experience
+* Pasta Alfredo → Garlic Bread — toasted garlic bread pairs naturally with creamy pasta
+* Chocolate Brownie → Vanilla Ice Cream — cold vanilla ice cream melts beautifully over warm brownie
+* Grilled Chicken Sandwich → Iced Lemon Tea — light citrus drink balances the richness of grilled chicken
+* Pancakes → Maple Latte — sweet maple notes complement fluffy breakfast pancakes
+* Veggie Burger → Sweet Potato Fries — sweet potato fries enhance the savory burger flavor
+* Berry Smoothie → Granola Parfait — crunchy granola adds texture to a refreshing smoothie
+* Cold Brew Coffee → Blueberry Muffin — slightly sweet muffin balances the bitterness of cold brew
 
 RULES
 * Analyze the specific ordered item and evaluate the full menu for context.
 * Choose ONE complementary item from the recommendation list only.
-* Do NOT recommend the same item for every ordered item — recommendations must vary.
-* Avoid defaulting to vanilla ice cream or any single item unless the pairing is truly the best match.
+* Do NOT recommend the same item for every ordered item — recommendations must vary per item.
+* Avoid defaulting to any single item (e.g., vanilla ice cream) unless the pairing is truly the best match.
 * The recommendation must make culinary sense and feel natural in a restaurant context.
+
+PERSUASION GOAL
+The recommendation should subtly encourage the customer to add the suggested item by highlighting how it completes the meal or improves the experience.
+Tone: friendly, confident, natural, slightly persuasive — not overly salesy. Think thoughtful waiter, not billboard ad.
+
+VARIETY ENFORCEMENT
+If multiple items in the menu could pair well with the ordered item, prefer different recommendations across different ordered items.
+Avoid recommending the same item repeatedly for an entire category.
+Only repeat a recommendation if it is clearly the most logical pairing.
 
 Always respond ONLY in this exact JSON format with no extra text:
 {"recommended_item": "<exact name from the recommendation list>", "reason": "<clear explanation of why this item pairs well>", "upsell_copy": "<8-15 word persuasive sentence suggesting the pairing>"}`
                 },
                 {
                     role: "user",
-                    content: `Customer cart:
-${cartItemsFormatted}
-
-Primary item being evaluated:
+                    content: `Customer ordered item:
 Name: ${primaryItem.name || 'Unknown'}
 Description: ${primaryItem.description || 'N/A'}
 Category: ${primaryItem.category || 'N/A'}
+
+Customer cart:
+${cartItemsFormatted}
 
 Full menu (for context and reasoning only — do NOT pick from here):
 ${menuContext}
@@ -525,7 +547,7 @@ ${menuContext}
 Recommendation list (you MUST pick from this list only):
 ${candidateList}
 
-Pick the ONE item from the recommendation list that best complements the primary item based on the full menu context. Return JSON only.`
+Based on the specific item ordered and the full menu context, pick the ONE item from the recommendation list that best complements this order. Return JSON only.`
                 }
             ]
         }, { signal: controller.signal });
