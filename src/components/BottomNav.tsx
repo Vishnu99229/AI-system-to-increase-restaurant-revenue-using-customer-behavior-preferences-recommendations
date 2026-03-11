@@ -1,4 +1,3 @@
-import { useApp } from "../contexts/AppContext";
 
 interface BottomNavProps {
     activeTab: "menu" | "orders" | "bill";

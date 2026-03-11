@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { rankCandidatesAI } from "../utils/recommendations";
+
 import { fetchMenu } from "../utils/api";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
@@ -10,7 +10,7 @@ import CartPreviewBar from "../components/CartPreviewBar";
 import CartOverlay from "../components/CartOverlay";
 import BottomNav from "../components/BottomNav";
 
-export default function Menu({ onBack }: { onBack: () => void }) {
+export default function Menu({ onBack: _onBack }: { onBack: () => void }) {
     const { state, dispatch } = useApp();
 
     const [items, setItems] = useState<Item[]>(state.menuItems);

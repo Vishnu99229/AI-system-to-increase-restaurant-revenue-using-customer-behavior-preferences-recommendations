@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext";
 import { rankCandidatesAI } from "../utils/recommendations";
-import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
+import { trackOrderComplete } from "../utils/api";
 import type { Item, Recommendation } from "../utils/recommendations";
 
 interface CartOverlayProps {
