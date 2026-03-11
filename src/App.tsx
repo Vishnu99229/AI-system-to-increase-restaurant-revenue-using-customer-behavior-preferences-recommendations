@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import Landing from "./screens/Landing";
 import Menu from "./screens/Menu";
-import Checkout from "./screens/Checkout";
 import InvalidTable from "./screens/InvalidTable";
 import QRPrintPage from "./screens/QRPrintPage";
 import AdminLogin from "./screens/admin/AdminLogin";
@@ -11,7 +10,7 @@ import { AppProvider, useApp } from "./contexts/AppContext";
 
 function AppContent() {
     const { state, dispatch } = useApp();
-    const [screen, setScreen] = useState<"landing" | "menu" | "checkout">("landing");
+    const [screen, setScreen] = useState<"landing" | "menu">("landing");
     const [tableError, setTableError] = useState(false);
     
     // Admin state
@@ -93,13 +92,7 @@ function AppContent() {
                 <Landing onViewMenu={() => setScreen("menu")} />
             )}
             {screen === "menu" && (
-                <Menu
-                    onBack={() => setScreen("landing")}
-                    onViewCart={() => setScreen("checkout")}
-                />
-            )}
-            {screen === "checkout" && (
-                <Checkout onBack={() => setScreen("menu")} />
+                <Menu onBack={() => setScreen("landing")} />
             )}
         </div>
     );
