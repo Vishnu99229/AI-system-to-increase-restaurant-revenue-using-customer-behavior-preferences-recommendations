@@ -512,50 +512,36 @@ app.post("/api/rank-upsell", async (req, res) => {
             console.warn("[rank-upsell] Cart DB enrichment failed:", dbErr.message);
         }
 
-        // --- Filter Candidates ---
-        const primaryItemIds = new Set(enrichedCartItems.map(i => i.id));
-        const primaryItem = enrichedCartItems[0] || {};
+        // --- Candidate Generation (minimal deterministic algorithm) ---
+        // Only two rules: exclude primary item & exclude items already in cart
+        const cartItemIds = new Set(enrichedCartItems.map(i => i.id));
 
-        // 1. Initial safe filtering
-        let validItems = enrichedCandidates.filter(c =>
-            c.is_available !== false &&
-            !primaryItemIds.has(c.id) &&
-            c.id !== primaryItem.id
-        );
+        let pool = enrichedCandidates.filter(item => {
+            if (cartItemIds.has(item.id)) return false;
+            return true;
+        });
 
-        // 2. Enforce category diversity (max 2 items per category)
-        const categoryCounts = {};
-        const diverseCandidates = [];
-
-        for (const item of validItems) {
-            const cat = (item.category || 'Other').toLowerCase();
-            categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
-            
-            if (categoryCounts[cat] <= 2) {
-                diverseCandidates.push(item);
-            }
-        }
-
-        if (diverseCandidates.length === 0) {
+        if (pool.length === 0) {
             console.log("[rank-upsell] No valid candidates after filtering");
             return res.status(400).json({ error: "No valid candidates" });
         }
 
-        // 3. Randomize candidate order
-        let finalCandidates = diverseCandidates
+        // Shuffle the entire pool before slicing
+        pool = pool
             .map(x => ({ x, r: Math.random() }))
             .sort((a, b) => a.r - b.r)
             .map(x => x.x);
 
-        // 4. Limit to maximum candidate count (10)
-        finalCandidates = finalCandidates.slice(0, 10);
+        // Slice to max 10
+        const finalCandidates = pool.slice(0, 10);
 
-        // 5. Add debugging logs
+        const primaryItem = enrichedCartItems[0] || {};
+        console.log(`[rank-upsell] primary item: ${primaryItem.name || 'Unknown'}`);
         console.log(`[rank-upsell] candidate pool size: ${finalCandidates.length}`);
         console.log(`[rank-upsell] candidates: ${JSON.stringify(finalCandidates.map(c => c.name))}`);
 
         // Full menu context passed separately so GPT can reason with complete landscape
-        const fullMenuContext = enrichedCandidates.filter(c => c.is_available !== false);
+        const fullMenuContext = enrichedCandidates;
 
         // --- AI-driven selection: evaluate per cart item ---
         let finalUpsell = null;

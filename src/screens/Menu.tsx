@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getDeterministicUpsell, rankCandidatesAI } from "../utils/recommendations";
+import { rankCandidatesAI } from "../utils/recommendations";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
 import type { Item, Recommendation } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
@@ -81,10 +81,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         if (!selectedItem) return;
         if (items.length === 0) return;
 
-        // Build candidate list using the deterministic engine (same logic as before)
-        const candidate = getDeterministicUpsell(selectedItem, state.cartItems, items);
-        if (!candidate) return;
-
         // Guard: only call ranking once per selected item
         if (rankCalledFor.current === selectedItem.id) return;
         rankCalledFor.current = selectedItem.id;
@@ -93,8 +89,8 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setUpsellLoading(true);
         setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
 
-        // Single GPT call — POST /api/rank-upsell
-        rankCandidatesAI([candidate.item], [selectedItem, ...state.cartItems]).then(rec => {
+        // Send the FULL menu to the backend — it handles all filtering
+        rankCandidatesAI(items, [selectedItem, ...state.cartItems]).then(rec => {
             if (!isMounted.current) return;
 
             setUpsellLoading(false);

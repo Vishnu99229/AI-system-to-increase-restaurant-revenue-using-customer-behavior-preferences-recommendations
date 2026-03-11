@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext";
-import { getCheckoutUpsellCandidates, rankCandidatesAI } from "../utils/recommendations";
+import { rankCandidatesAI } from "../utils/recommendations";
 import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
@@ -35,7 +35,7 @@ interface CheckoutProps {
  */
 export default function Checkout({ onBack }: CheckoutProps) {
     const { state, dispatch, resetSessionAfterOrder } = useApp();
-    const { cartItems, viewedItems, lastItemAddedId, pairingAcceptedByItemId, checkoutUpsellShownByItemId } = state;
+    const { cartItems, lastItemAddedId, pairingAcceptedByItemId, checkoutUpsellShownByItemId } = state;
 
     // Upsell UI state
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
@@ -74,12 +74,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
         if (hasEvaluatedUpsell.current) return;
         hasEvaluatedUpsell.current = true;
 
-        // Step 1: Find candidates unconditionally
-        const approvedCandidates = getCheckoutUpsellCandidates(cartItems, viewedItems, state.menuItems);
-
-        if (approvedCandidates.length === 0) {
-            return; // No candidates available
-        }
+        // No menu items mean no upsell candidates possible
+        if (!state.menuItems || state.menuItems.length === 0) return;
 
         // Helper to check display gates when we are ready to render
         const checkDisplayGatesAndRender = (finalRec: Recommendation) => {
@@ -111,9 +107,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
         setUpsellLoading(true);
         setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
 
-        // Step 2: AI Ranking → POST /api/rank-upsell (single source of truth)
-        // Backend handles GPT ranking + reason generation + fallback.
-        rankCandidatesAI(approvedCandidates, cartItems)
+        // Send FULL menu to backend — it handles all filtering
+        rankCandidatesAI(state.menuItems, cartItems)
             .then(rec => {
                 if (!isMounted.current) return;
 
