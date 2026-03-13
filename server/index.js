@@ -358,10 +358,109 @@ const { generateUpsell } = require("./aiUpsellEngine");
 let twilioClient = null;
 const TWILIO_FROM = process.env.TWILIO_WHATSAPP_NUMBER ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}` : null;
 const TWILIO_TO = process.env.RESTAURANT_WHATSAPP_NUMBER ? `whatsapp:${process.env.RESTAURANT_WHATSAPP_NUMBER}` : null;
+// SMS-capable number (falls back to WhatsApp number for Twilio Sandbox which supports both)
+const TWILIO_SMS_FROM = process.env.TWILIO_SMS_NUMBER || process.env.TWILIO_WHATSAPP_NUMBER || null;
 
 if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
     twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    console.log("[Twilio] Client initialized. SMS FROM:", TWILIO_SMS_FROM || "NOT SET");
+} else {
+    console.warn("[Twilio] Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN — SMS disabled");
 }
+
+// --- OTP Store (in-memory) ---
+const otpStore = {}; // { [phone_number]: { code: string, expires: number } }
+
+// Cleanup expired OTPs periodically (every 10 minutes)
+setInterval(() => {
+    const now = Date.now();
+    for (const phone in otpStore) {
+        if (otpStore[phone].expires < now) {
+            delete otpStore[phone];
+        }
+    }
+}, 10 * 60 * 1000);
+
+// --- POST /api/send-otp ---
+app.post("/api/send-otp", async (req, res) => {
+    try {
+        const { phone_number } = req.body;
+        if (!phone_number) {
+            return res.status(400).json({ success: false, error: "Phone number is required" });
+        }
+
+        // Generate 6-digit OTP
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+        otpStore[phone_number] = { code, expires };
+        console.log(`[otp] generated code ${code} for ${phone_number}`);
+
+        // Send SMS via Twilio
+        if (twilioClient && TWILIO_SMS_FROM) {
+            try {
+                console.log(`[otp] sending sms via twilio to ${phone_number} from ${TWILIO_SMS_FROM}`);
+                const smsBody = `${code} is your Orlena verification code.\n\nThis code expires in 5 minutes.\n\n@orlena.talk #${code}`;
+                const message = await twilioClient.messages.create({
+                    body: smsBody,
+                    from: TWILIO_SMS_FROM,
+                    to: phone_number,
+                });
+                console.log(`[otp] sms sent via twilio, SID: ${message.sid}`);
+            } catch (smsErr) {
+                console.error("[otp] twilio error:", smsErr.message);
+                // Still return success — OTP is stored, user can retry or we can log the code for dev
+            }
+        } else {
+            console.warn("[otp] Twilio not configured — OTP stored in memory only. Code:", code);
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error("[otp] send-otp error:", err.message);
+        res.status(500).json({ success: false, error: "Failed to send OTP" });
+    }
+});
+
+// --- POST /api/verify-otp ---
+app.post("/api/verify-otp", async (req, res) => {
+    try {
+        const { phone_number, otp } = req.body;
+        if (!phone_number || !otp) {
+            return res.status(400).json({ verified: false, error: "Phone number and OTP are required" });
+        }
+
+        const stored = otpStore[phone_number];
+        if (!stored) {
+            return res.json({ verified: false, error: "No OTP found. Please request a new one." });
+        }
+
+        if (Date.now() > stored.expires) {
+            delete otpStore[phone_number];
+            return res.json({ verified: false, error: "OTP has expired. Please request a new one." });
+        }
+
+        if (stored.code !== otp) {
+            console.log("[otp] verification failed for", phone_number, "— code mismatch");
+            return res.json({ verified: false, error: "Invalid OTP. Please try again." });
+        }
+
+        // OTP valid — clean up and return verification token
+        delete otpStore[phone_number];
+        const crypto = require("crypto");
+        const token = crypto.randomBytes(32).toString("hex");
+
+        console.log("[otp] verification successful for", phone_number);
+        res.json({
+            verified: true,
+            verification_token: token,
+            expires_in: 86400, // 24 hours in seconds
+        });
+    } catch (err) {
+        console.error("[otp] verify-otp error:", err.message);
+        res.status(500).json({ verified: false, error: "Verification failed" });
+    }
+});
 
 // --- Standard Client Routes ---
 app.get("/api/restaurant/:id", async (req, res) => {
@@ -516,24 +615,24 @@ app.post("/api/rank-upsell", async (req, res) => {
         // Only two rules: exclude primary item & exclude items already in cart
         const cartItemIds = new Set(enrichedCartItems.map(i => i.id));
 
-        let pool = enrichedCandidates.filter(item => {
+        let candidatePool = enrichedCandidates.filter(item => {
             if (cartItemIds.has(item.id)) return false;
             return true;
         });
 
-        if (pool.length === 0) {
+        if (candidatePool.length === 0) {
             console.log("[rank-upsell] No valid candidates after filtering");
             return res.status(400).json({ error: "No valid candidates" });
         }
 
         // Shuffle the entire pool before slicing
-        pool = pool
+        candidatePool = candidatePool
             .map(x => ({ x, r: Math.random() }))
             .sort((a, b) => a.r - b.r)
             .map(x => x.x);
 
         // Slice to max 10
-        const finalCandidates = pool.slice(0, 10);
+        const finalCandidates = candidatePool.slice(0, 10);
 
         const primaryItem = enrichedCartItems[0] || {};
         console.log(`[rank-upsell] primary item: ${primaryItem.name || 'Unknown'}`);

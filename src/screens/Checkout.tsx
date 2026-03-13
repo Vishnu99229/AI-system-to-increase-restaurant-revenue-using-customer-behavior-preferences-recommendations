@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useApp } from "../contexts/AppContext";
 import { rankCandidatesAI } from "../utils/recommendations";
 import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
+import PhoneVerificationModal from "../components/PhoneVerificationModal";
 
 const UPSELL_HEADERS = [
     "Recommended by our chef for this order",
@@ -164,9 +165,25 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const total = subtotal + tax;
 
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [showPhoneModal, setShowPhoneModal] = useState(false);
+    const [verifiedPhone, setVerifiedPhone] = useState("");
 
-    const handlePlaceOrder = () => {
-        if (isSubmitting) return;
+    // Check localStorage for cached phone verification on mount
+    useEffect(() => {
+        try {
+            const stored = localStorage.getItem("orlena_phone_verification");
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                if (parsed.phone && parsed.expires && Date.now() < parsed.expires) {
+                    setVerifiedPhone(parsed.phone);
+                }
+            }
+        } catch {
+            // Ignore parse errors
+        }
+    }, []);
+
+    const submitOrder = useCallback((phone: string) => {
         setIsSubmitting(true);
 
         console.log("Order placed:", {
@@ -185,13 +202,35 @@ export default function Checkout({ onBack }: CheckoutProps) {
             cartItems.map(item => ({ name: item.name, price: item.price })),
             state.tableNumber,
             state.customerName,
-            state.customerPhone
+            phone
         );
 
+        console.log("[order] order placed");
         alert("Order placed! (Check console for details)");
         // Reset session state after successful order, then navigate back
         resetSessionAfterOrder();
         onBack();
+    }, [isSubmitting, state, cartItems, total, upsellAccepted, upsellValue, resetSessionAfterOrder, onBack]);
+
+    const handlePlaceOrder = () => {
+        if (isSubmitting) return;
+
+        // If phone is already verified (cached or just verified), submit directly
+        if (verifiedPhone) {
+            dispatch({ type: "SET_CUSTOMER_PHONE", payload: verifiedPhone });
+            submitOrder(verifiedPhone);
+            return;
+        }
+
+        // Otherwise, show phone verification modal
+        setShowPhoneModal(true);
+    };
+
+    const handlePhoneVerified = (phone: string) => {
+        setVerifiedPhone(phone);
+        setShowPhoneModal(false);
+        dispatch({ type: "SET_CUSTOMER_PHONE", payload: phone });
+        submitOrder(phone);
     };
 
     const handleAddUpsell = () => {
@@ -342,6 +381,14 @@ export default function Checkout({ onBack }: CheckoutProps) {
                         {isSubmitting ? "Processing..." : "Place Order"}
                     </Button>
                 </div>
+            )}
+
+            {/* Phone Verification Modal */}
+            {showPhoneModal && (
+                <PhoneVerificationModal
+                    onVerified={handlePhoneVerified}
+                    onClose={() => setShowPhoneModal(false)}
+                />
             )}
         </div>
     );

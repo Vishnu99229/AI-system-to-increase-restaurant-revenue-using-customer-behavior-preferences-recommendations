@@ -8,23 +8,19 @@ interface LandingProps {
 export default function Landing({ onViewMenu }: LandingProps) {
     const { state, dispatch } = useApp();
     const [nameValue, setNameValue] = useState("");
-    const [phoneValue, setPhoneValue] = useState("");
 
     useEffect(() => {
         // Hydrate inputs from context for returning users
         if (state.customerName) setNameValue(state.customerName);
-        if (state.customerPhone) setPhoneValue(state.customerPhone);
         // Also keep legacy userName in sync
         if (state.userName && !state.customerName) setNameValue(state.userName);
-    }, [state.customerName, state.customerPhone, state.userName]);
+    }, [state.customerName, state.userName]);
 
-    const phoneDigits = phoneValue.replace(/\D/g, "");
-    const isValid = nameValue.trim().length > 0 && phoneDigits.length >= 10;
+    const isValid = nameValue.trim().length > 0;
 
     const handleViewMenu = () => {
         if (!isValid) return;
         dispatch({ type: "SET_CUSTOMER_NAME", payload: nameValue.trim() });
-        dispatch({ type: "SET_CUSTOMER_PHONE", payload: phoneValue.trim() });
         // Keep legacy userName in sync
         dispatch({ type: "SET_USER_NAME", payload: nameValue.trim() });
         onViewMenu();
@@ -50,20 +46,6 @@ export default function Landing({ onViewMenu }: LandingProps) {
                         onChange={(e) => setNameValue(e.target.value)}
                         className="w-full px-4 py-3 rounded-lg border border-primary/30 bg-white text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-base"
                     />
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-dark/70 mb-1">Phone Number *</label>
-                    <input
-                        type="tel"
-                        placeholder="e.g. 9876543210"
-                        value={phoneValue}
-                        onChange={(e) => setPhoneValue(e.target.value)}
-                        className="w-full px-4 py-3 rounded-lg border border-primary/30 bg-white text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-base"
-                    />
-                    {phoneValue.length > 0 && phoneDigits.length < 10 && (
-                        <p className="text-xs text-red-500 mt-1">Phone must be at least 10 digits</p>
-                    )}
                 </div>
 
                 <button
