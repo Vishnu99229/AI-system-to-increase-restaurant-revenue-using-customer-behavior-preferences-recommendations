@@ -87,6 +87,37 @@ export async function trackOrderComplete(
     } catch (error) {}
 }
 
+// --- OTP Verification ---
+
+export async function sendOtp(phone_number: string): Promise<{ success: boolean; error?: string }> {
+    try {
+        const res = await fetch(`${API_BASE}/api/send-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone_number }),
+        });
+        return await res.json();
+    } catch {
+        return { success: false, error: "Network error" };
+    }
+}
+
+export async function verifyOtp(
+    phone_number: string,
+    otp: string
+): Promise<{ verified: boolean; verification_token?: string; expires_in?: number; error?: string }> {
+    try {
+        const res = await fetch(`${API_BASE}/api/verify-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone_number, otp }),
+        });
+        return await res.json();
+    } catch {
+        return { verified: false, error: "Network error" };
+    }
+}
+
 // --- Admin API ---
 
 const getAuthHeader = (): Record<string, string> => {
