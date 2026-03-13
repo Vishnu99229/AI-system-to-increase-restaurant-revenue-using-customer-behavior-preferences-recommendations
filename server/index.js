@@ -356,16 +356,18 @@ const { generateUpsell } = require("./aiUpsellEngine");
 
 // --- Twilio Client ---
 let twilioClient = null;
-const TWILIO_FROM = process.env.TWILIO_WHATSAPP_NUMBER ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}` : null;
-const TWILIO_TO = process.env.RESTAURANT_WHATSAPP_NUMBER ? `whatsapp:${process.env.RESTAURANT_WHATSAPP_NUMBER}` : null;
-// SMS-capable number (falls back to WhatsApp number for Twilio Sandbox which supports both)
-const TWILIO_SMS_FROM = process.env.TWILIO_SMS_NUMBER || process.env.TWILIO_WHATSAPP_NUMBER || null;
 
-if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
-    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    console.log("[Twilio] Client initialized. SMS FROM:", TWILIO_SMS_FROM || "NOT SET");
+const accountSid = process.env.TWILIO_ACCOUNT_SID;
+const authToken = process.env.TWILIO_AUTH_TOKEN;
+const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+if (accountSid && authToken) {
+    twilioClient = twilio(accountSid, authToken);
+    console.log("[Twilio] Client initialized");
+    console.log("[Twilio] TWILIO_ACCOUNT_SID:", accountSid);
+    console.log("[Twilio] TWILIO_PHONE_NUMBER:", fromNumber || "NOT SET");
 } else {
-    console.warn("[Twilio] Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN — SMS disabled");
+    console.warn("[Twilio] Twilio environment variables missing — SMS disabled");
 }
 
 // --- OTP Store (in-memory) ---
@@ -397,22 +399,35 @@ app.post("/api/send-otp", async (req, res) => {
         console.log(`[otp] generated code ${code} for ${phone_number}`);
 
         // Send SMS via Twilio
-        if (twilioClient && TWILIO_SMS_FROM) {
+        const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+
+        console.log("ENV CHECK:", {
+            SID: process.env.TWILIO_ACCOUNT_SID,
+            AUTH: process.env.TWILIO_AUTH_TOKEN ? "present" : "missing",
+            PHONE: process.env.TWILIO_PHONE_NUMBER
+        });
+
+        if (twilioClient && twilioPhone) {
             try {
-                console.log(`[otp] sending sms via twilio to ${phone_number} from ${TWILIO_SMS_FROM}`);
+                console.log("[otp] Sending SMS via Twilio");
                 const smsBody = `${code} is your Orlena verification code.\n\nThis code expires in 5 minutes.\n\n@orlena.talk #${code}`;
                 const message = await twilioClient.messages.create({
                     body: smsBody,
-                    from: TWILIO_SMS_FROM,
+                    from: twilioPhone,
                     to: phone_number,
                 });
                 console.log(`[otp] sms sent via twilio, SID: ${message.sid}`);
             } catch (smsErr) {
                 console.error("[otp] twilio error:", smsErr.message);
-                // Still return success — OTP is stored, user can retry or we can log the code for dev
+                // Still return success — OTP is stored, user can retry
             }
         } else {
-            console.warn("[otp] Twilio not configured — OTP stored in memory only. Code:", code);
+            if (!twilioClient) {
+                console.warn("[otp] Twilio environment variables missing — cannot send SMS");
+            } else {
+                console.warn("[otp] TWILIO_PHONE_NUMBER not set — cannot send SMS");
+            }
+            console.warn("[otp] OTP stored in memory only. Code:", code);
         }
 
         res.json({ success: true });
