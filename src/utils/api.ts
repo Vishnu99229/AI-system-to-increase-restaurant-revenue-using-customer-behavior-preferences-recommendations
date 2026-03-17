@@ -87,11 +87,13 @@ export async function trackOrderComplete(
     } catch (error) {}
 }
 
-// --- OTP Verification ---
+// --- Customer Login (after Firebase phone verification) ---
 
-export async function sendOtp(phone_number: string): Promise<{ success: boolean; error?: string }> {
+export async function customerLogin(
+    phone_number: string
+): Promise<{ success: boolean; token?: string; expires_in?: number; error?: string }> {
     try {
-        const res = await fetch(`${API_BASE}/api/send-otp`, {
+        const res = await fetch(`${API_BASE}/api/customer-login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ phone_number }),
@@ -102,21 +104,6 @@ export async function sendOtp(phone_number: string): Promise<{ success: boolean;
     }
 }
 
-export async function verifyOtp(
-    phone_number: string,
-    otp: string
-): Promise<{ verified: boolean; verification_token?: string; expires_in?: number; error?: string }> {
-    try {
-        const res = await fetch(`${API_BASE}/api/verify-otp`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ phone_number, otp }),
-        });
-        return await res.json();
-    } catch {
-        return { verified: false, error: "Network error" };
-    }
-}
 
 // --- Admin API ---
 

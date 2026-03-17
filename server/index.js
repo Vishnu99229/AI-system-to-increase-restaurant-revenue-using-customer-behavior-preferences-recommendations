@@ -12,7 +12,7 @@ console.log("Loaded API Key:", process.env.OPENAI_API_KEY.substring(0, 15) + "..
 
 const express = require("express");
 const OpenAI = require("openai");
-const twilio = require("twilio");
+
 const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -99,7 +99,17 @@ const pool = new Pool({
         `);
         // Add candidate_pool_size to upsell_events
         await pool.query(`ALTER TABLE upsell_events ADD COLUMN IF NOT EXISTS candidate_pool_size INTEGER`);
-        console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events)");
+
+        // Customers table for phone auth
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS customers (
+                id SERIAL PRIMARY KEY,
+                phone_number VARCHAR(20) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events, customers)");
 
         // --- Local Database Seeding ---
         if (
@@ -354,126 +364,74 @@ app.delete("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const { generateUpsell } = require("./aiUpsellEngine");
 
-// --- Twilio Client ---
-let twilioClient = null;
+// --- Verified Customer Cache (24 hours in-memory) ---
+const verifiedCustomerCache = {}; // { [phone_number]: { verified: true, expires_at: timestamp } }
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-
-if (accountSid && authToken) {
-    twilioClient = twilio(accountSid, authToken);
-    console.log("[Twilio] Client initialized");
-    console.log("[Twilio] TWILIO_ACCOUNT_SID:", accountSid);
-    console.log("[Twilio] TWILIO_PHONE_NUMBER:", fromNumber || "NOT SET");
-} else {
-    console.warn("[Twilio] Twilio environment variables missing — SMS disabled");
-}
-
-// --- OTP Store (in-memory) ---
-const otpStore = {}; // { [phone_number]: { code: string, expires: number } }
-
-// Cleanup expired OTPs periodically (every 10 minutes)
+// Cleanup expired cache entries periodically (every 30 minutes)
 setInterval(() => {
     const now = Date.now();
-    for (const phone in otpStore) {
-        if (otpStore[phone].expires < now) {
-            delete otpStore[phone];
+    for (const phone in verifiedCustomerCache) {
+        if (verifiedCustomerCache[phone].expires_at < now) {
+            delete verifiedCustomerCache[phone];
         }
     }
-}, 10 * 60 * 1000);
+}, 30 * 60 * 1000);
 
-// --- POST /api/send-otp ---
-app.post("/api/send-otp", async (req, res) => {
+// --- POST /api/customer-login ---
+// Called after successful Firebase phone verification on the frontend.
+// Upserts the customer in Postgres and returns a session token.
+app.post("/api/customer-login", async (req, res) => {
     try {
         const { phone_number } = req.body;
         if (!phone_number) {
             return res.status(400).json({ success: false, error: "Phone number is required" });
         }
 
-        // Generate 6-digit OTP
-        const code = String(Math.floor(100000 + Math.random() * 900000));
-        const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
-
-        otpStore[phone_number] = { code, expires };
-        console.log(`[otp] generated code ${code} for ${phone_number}`);
-
-        // Send SMS via Twilio
-        const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
-
-        console.log("ENV CHECK:", {
-            SID: process.env.TWILIO_ACCOUNT_SID,
-            AUTH: process.env.TWILIO_AUTH_TOKEN ? "present" : "missing",
-            PHONE: process.env.TWILIO_PHONE_NUMBER
-        });
-
-        if (twilioClient && twilioPhone) {
-            try {
-                console.log("[otp] Sending SMS via Twilio");
-                const smsBody = `${code} is your Orlena verification code.\n\nThis code expires in 5 minutes.\n\n@orlena.talk #${code}`;
-                const message = await twilioClient.messages.create({
-                    body: smsBody,
-                    from: twilioPhone,
-                    to: phone_number,
-                });
-                console.log(`[otp] sms sent via twilio, SID: ${message.sid}`);
-            } catch (smsErr) {
-                console.error("[otp] twilio error:", smsErr.message);
-                // Still return success — OTP is stored, user can retry
-            }
-        } else {
-            if (!twilioClient) {
-                console.warn("[otp] Twilio environment variables missing — cannot send SMS");
-            } else {
-                console.warn("[otp] TWILIO_PHONE_NUMBER not set — cannot send SMS");
-            }
-            console.warn("[otp] OTP stored in memory only. Code:", code);
+        // Validate phone number format (must start with + and have at least 10 digits)
+        const digitsOnly = phone_number.replace(/\D/g, "");
+        if (!phone_number.startsWith("+") || digitsOnly.length < 10) {
+            return res.status(400).json({ success: false, error: "Invalid phone number format" });
         }
 
-        res.json({ success: true });
-    } catch (err) {
-        console.error("[otp] send-otp error:", err.message);
-        res.status(500).json({ success: false, error: "Failed to send OTP" });
-    }
-});
-
-// --- POST /api/verify-otp ---
-app.post("/api/verify-otp", async (req, res) => {
-    try {
-        const { phone_number, otp } = req.body;
-        if (!phone_number || !otp) {
-            return res.status(400).json({ verified: false, error: "Phone number and OTP are required" });
+        // Check in-memory cache — skip DB write if recently verified
+        const cached = verifiedCustomerCache[phone_number];
+        if (cached && cached.expires_at > Date.now()) {
+            console.log(`[customer-login] Cache hit for ${phone_number}`);
+            const token = jwt.sign({ phone: phone_number }, JWT_SECRET, { expiresIn: "24h" });
+            return res.json({
+                success: true,
+                token,
+                expires_in: 86400,
+                cached: true,
+            });
         }
 
-        const stored = otpStore[phone_number];
-        if (!stored) {
-            return res.json({ verified: false, error: "No OTP found. Please request a new one." });
-        }
+        // Upsert customer in Postgres
+        await pool.query(
+            `INSERT INTO customers (phone_number, last_verified_at)
+             VALUES ($1, NOW())
+             ON CONFLICT (phone_number)
+             DO UPDATE SET last_verified_at = NOW()`,
+            [phone_number]
+        );
 
-        if (Date.now() > stored.expires) {
-            delete otpStore[phone_number];
-            return res.json({ verified: false, error: "OTP has expired. Please request a new one." });
-        }
-
-        if (stored.code !== otp) {
-            console.log("[otp] verification failed for", phone_number, "— code mismatch");
-            return res.json({ verified: false, error: "Invalid OTP. Please try again." });
-        }
-
-        // OTP valid — clean up and return verification token
-        delete otpStore[phone_number];
-        const crypto = require("crypto");
-        const token = crypto.randomBytes(32).toString("hex");
-
-        console.log("[otp] verification successful for", phone_number);
-        res.json({
+        // Update cache
+        verifiedCustomerCache[phone_number] = {
             verified: true,
-            verification_token: token,
-            expires_in: 86400, // 24 hours in seconds
+            expires_at: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+        };
+
+        const token = jwt.sign({ phone: phone_number }, JWT_SECRET, { expiresIn: "24h" });
+        console.log(`[customer-login] Verified and cached ${phone_number}`);
+
+        res.json({
+            success: true,
+            token,
+            expires_in: 86400,
         });
     } catch (err) {
-        console.error("[otp] verify-otp error:", err.message);
-        res.status(500).json({ verified: false, error: "Verification failed" });
+        console.error("[customer-login] Error:", err.message);
+        res.status(500).json({ success: false, error: "Login failed" });
     }
 });
 

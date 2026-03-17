@@ -1,9 +1,61 @@
 import { useState, useEffect, useRef } from "react";
-import { sendOtp, verifyOtp } from "../utils/api";
+import { RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
+import type { ConfirmationResult } from "firebase/auth";
+import { auth } from "../lib/firebase";
+import { customerLogin } from "../utils/api";
+
+// Extend window to hold the singleton reCAPTCHA verifier
+declare global {
+    interface Window {
+        recaptchaVerifier?: RecaptchaVerifier;
+    }
+}
 
 interface PhoneVerificationModalProps {
     onVerified: (phone: string) => void;
     onClose: () => void;
+}
+
+/**
+ * Lazily creates (or reuses) an invisible RecaptchaVerifier.
+ * Only called when the user clicks "Send OTP" — never on mount.
+ * Attaches to the #recaptcha-container div which must already be in the DOM.
+ */
+function setupRecaptcha(): RecaptchaVerifier {
+    // Reuse existing verifier if it's still alive
+    if (window.recaptchaVerifier) {
+        console.log("[OTP Debug] Reusing existing RecaptchaVerifier");
+        return window.recaptchaVerifier;
+    }
+
+    // CHECK 1: Verify container exists in DOM
+    const container = document.getElementById("recaptcha-container");
+    if (!container) {
+        console.error("[OTP Debug] CHECK 1 FAIL: #recaptcha-container missing from DOM");
+        throw new Error("recaptcha-container not found in DOM");
+    }
+    console.log("[OTP Debug] CHECK 1 OK: #recaptcha-container found in DOM");
+
+    window.recaptchaVerifier = new RecaptchaVerifier(auth, container, {
+        size: "invisible",
+    });
+
+    console.log("[OTP Debug] RecaptchaVerifier created (invisible)");
+    return window.recaptchaVerifier;
+}
+
+/**
+ * Clears the current reCAPTCHA verifier so a fresh one can be created on retry.
+ */
+function clearRecaptcha(): void {
+    if (window.recaptchaVerifier) {
+        try {
+            window.recaptchaVerifier.clear();
+        } catch {
+            // ignore cleanup errors
+        }
+        window.recaptchaVerifier = undefined;
+    }
 }
 
 export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVerificationModalProps) {
@@ -13,28 +65,89 @@ export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVer
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const otpInputRef = useRef<HTMLInputElement>(null);
+    const confirmationResultRef = useRef<ConfirmationResult | null>(null);
 
     const phoneDigits = phone.replace(/\D/g, "");
     const isPhoneValid = phoneDigits.length >= 10;
     const isOtpValid = otp.replace(/\D/g, "").length === 6;
+
+    // Clean up reCAPTCHA verifier when modal unmounts
+    useEffect(() => {
+        return () => {
+            clearRecaptcha();
+        };
+    }, []);
+
+    /**
+     * Core sign-in attempt. Separated so handleSendOtp can retry once silently.
+     */
+    const attemptSignIn = async (fullPhone: string): Promise<ConfirmationResult> => {
+        // --- Pre-flight diagnostics (CHECK 1–4) ---
+        console.log("[OTP Debug] Pre-flight:", {
+            "CHECK 1 - container": document.getElementById("recaptcha-container") ? "PRESENT" : "MISSING",
+            "CHECK 2 - phone (E.164)": fullPhone,
+            "CHECK 3 - projectId": auth.app.options.projectId || "MISSING",
+            "CHECK 4 - origin": window.location.origin,
+            "CHECK 4 - authDomain": auth.app.options.authDomain || "MISSING",
+        });
+
+        const verifier = setupRecaptcha();
+
+        try {
+            const result = await signInWithPhoneNumber(auth, fullPhone, verifier);
+            console.log("[OTP Debug] signInWithPhoneNumber succeeded — OTP sent to", fullPhone);
+            return result;
+        } catch (err: any) {
+            console.error("[OTP Debug] signInWithPhoneNumber FAILED:", {
+                code: err?.code,
+                message: err?.message,
+                phone: fullPhone,
+            });
+            throw err;
+        }
+    };
 
     const handleSendOtp = async () => {
         if (!isPhoneValid || loading) return;
         setLoading(true);
         setError("");
 
+        const fullPhone = `+91${phoneDigits.slice(-10)}`;
+
         try {
-            const fullPhone = `+91${phoneDigits.slice(-10)}`;
-            const result = await sendOtp(fullPhone);
-            if (result.success) {
-                setStep("otp");
-                // Attempt WebOTP autofill on supported browsers
-                tryWebOtpAutofill();
+            // First attempt
+            const result = await attemptSignIn(fullPhone);
+            confirmationResultRef.current = result;
+            setStep("otp");
+        } catch (firstErr: any) {
+            console.error("[Firebase OTP] First attempt failed:", firstErr?.code || firstErr);
+
+            // --- Silent retry: reset reCAPTCHA and try once more ---
+            if (firstErr?.code !== "auth/too-many-requests" && firstErr?.code !== "auth/invalid-phone-number") {
+                clearRecaptcha();
+                try {
+                    const retryResult = await attemptSignIn(fullPhone);
+                    confirmationResultRef.current = retryResult;
+                    setStep("otp");
+                    setLoading(false);
+                    return; // retry succeeded — exit early
+                } catch (retryErr: any) {
+                    console.error("[Firebase OTP] Retry also failed:", retryErr?.code || retryErr);
+                    clearRecaptcha();
+                    // Fall through to surface the original error
+                }
             } else {
-                setError(result.error || "Failed to send OTP. Please try again.");
+                clearRecaptcha();
             }
-        } catch {
-            setError("Failed to send OTP. Please try again.");
+
+            // Surface a user-friendly error
+            if (firstErr?.code === "auth/too-many-requests") {
+                setError("Too many attempts. Please try again later.");
+            } else if (firstErr?.code === "auth/invalid-phone-number") {
+                setError("Invalid phone number. Please check and try again.");
+            } else {
+                setError("Failed to send OTP. Please try again.");
+            }
         } finally {
             setLoading(false);
         }
@@ -48,51 +161,47 @@ export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVer
         try {
             const fullPhone = `+91${phoneDigits.slice(-10)}`;
             const otpCode = otp.replace(/\D/g, "");
-            const result = await verifyOtp(fullPhone, otpCode);
 
-            if (result.verified && result.verification_token) {
+            if (!confirmationResultRef.current) {
+                setError("Verification session expired. Please request a new OTP.");
+                setStep("phone");
+                setLoading(false);
+                return;
+            }
+
+            // Confirm the OTP with Firebase
+            await confirmationResultRef.current.confirm(otpCode);
+
+            // OTP verified — call backend to register/login customer
+            const loginResult = await customerLogin(fullPhone);
+
+            if (loginResult.success && loginResult.token) {
                 // Cache verification in localStorage for 24 hours
                 localStorage.setItem(
                     "orlena_phone_verification",
                     JSON.stringify({
                         phone: fullPhone,
-                        verification_token: result.verification_token,
+                        verification_token: loginResult.token,
                         verified_at: Date.now(),
-                        expires: Date.now() + (result.expires_in || 86400) * 1000,
+                        expires: Date.now() + (loginResult.expires_in || 86400) * 1000,
                     })
                 );
                 onVerified(fullPhone);
             } else {
-                setError(result.error || "Invalid OTP. Please try again.");
+                setError(loginResult.error || "Login failed. Please try again.");
             }
-        } catch {
-            setError("Verification failed. Please try again.");
+        } catch (err: any) {
+            console.error("[Firebase OTP] Verify error:", err);
+            if (err?.code === "auth/invalid-verification-code") {
+                setError("Invalid OTP. Please check and try again.");
+            } else if (err?.code === "auth/code-expired") {
+                setError("OTP has expired. Please request a new one.");
+                setStep("phone");
+            } else {
+                setError("Verification failed. Please try again.");
+            }
         } finally {
             setLoading(false);
-        }
-    };
-
-    const tryWebOtpAutofill = () => {
-        try {
-            if ("OTPCredential" in window) {
-                const ac = new AbortController();
-                // Auto-abort after 60 seconds
-                const timeout = setTimeout(() => ac.abort(), 60000);
-
-                (navigator.credentials as any)
-                    .get({ otp: { transport: ["sms"] }, signal: ac.signal })
-                    .then((otpCredential: any) => {
-                        if (otpCredential?.code) {
-                            setOtp(otpCredential.code);
-                        }
-                    })
-                    .catch(() => {
-                        // WebOTP not supported or user dismissed — ignore
-                    })
-                    .finally(() => clearTimeout(timeout));
-            }
-        } catch {
-            // WebOTP not available — silent fallback
         }
     };
 
@@ -207,6 +316,9 @@ export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVer
                         </button>
                     </div>
                 )}
+
+                {/* Invisible reCAPTCHA container — no visual impact */}
+                <div id="recaptcha-container" />
             </div>
         </div>
     );
