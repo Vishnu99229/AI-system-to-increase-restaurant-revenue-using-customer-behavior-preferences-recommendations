@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
 import type { ConfirmationResult } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import { auth, isFirebaseConfigured } from "../lib/firebase";
 import { customerLogin } from "../utils/api";
 
 // Extend window to hold the singleton reCAPTCHA verifier
@@ -22,6 +22,11 @@ interface PhoneVerificationModalProps {
  * Attaches to the #recaptcha-container div which must already be in the DOM.
  */
 function setupRecaptcha(): RecaptchaVerifier {
+    // Guard: auth must be available
+    if (!auth) {
+        throw new Error("Firebase auth not configured");
+    }
+
     // Reuse existing verifier if it's still alive
     if (window.recaptchaVerifier) {
         console.log("[OTP Debug] Reusing existing RecaptchaVerifier");
@@ -82,6 +87,10 @@ export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVer
      * Core sign-in attempt. Separated so handleSendOtp can retry once silently.
      */
     const attemptSignIn = async (fullPhone: string): Promise<ConfirmationResult> => {
+        if (!auth) {
+            throw new Error("Firebase auth not configured");
+        }
+
         // --- Pre-flight diagnostics (CHECK 1–4) ---
         console.log("[OTP Debug] Pre-flight:", {
             "CHECK 1 - container": document.getElementById("recaptcha-container") ? "PRESENT" : "MISSING",
@@ -231,7 +240,38 @@ export default function PhoneVerificationModal({ onVerified, onClose }: PhoneVer
                     </button>
                 </div>
 
-                {step === "phone" ? (
+                {/* Firebase not configured — graceful degradation */}
+                {!isFirebaseConfigured ? (
+                    <div className="space-y-4">
+                        <p className="text-sm text-dark/60">
+                            We'll send a one-time code to verify your number.
+                        </p>
+                        <div>
+                            <label className="block text-sm font-medium text-dark/70 mb-1">Phone Number</label>
+                            <div className="flex gap-2">
+                                <span className="flex items-center px-3 py-3 rounded-lg border border-gray-200 bg-gray-50 text-gray-400 text-base font-medium">
+                                    +91
+                                </span>
+                                <input
+                                    type="tel"
+                                    placeholder="9876543210"
+                                    disabled
+                                    className="flex-1 px-4 py-3 rounded-lg border border-gray-200 bg-gray-50 text-gray-400 placeholder-gray-300 text-base cursor-not-allowed"
+                                />
+                            </div>
+                        </div>
+
+                        <button
+                            disabled
+                            className="w-full py-3 rounded-xl text-base font-bold tracking-wide bg-gray-300 text-gray-500 cursor-not-allowed"
+                        >
+                            Send OTP
+                        </button>
+                        <p className="text-sm text-gray-400 mt-2 text-center">
+                            Phone verification is temporarily unavailable
+                        </p>
+                    </div>
+                ) : step === "phone" ? (
                     /* Phone Number Step */
                     <div className="space-y-4">
                         <p className="text-sm text-dark/60">
