@@ -4,6 +4,7 @@ import { rankCandidatesAI } from "../utils/recommendations";
 import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
+import { getCachedRecommendation, setCachedRecommendation } from "../utils/recommendationCache";
 import PhoneVerificationModal from "../components/PhoneVerificationModal";
 
 const UPSELL_HEADERS = [
@@ -104,9 +105,21 @@ export default function Checkout({ onBack }: CheckoutProps) {
             }
         };
 
-        // Show loading state immediately so the card renders with shimmer
-        setUpsellLoading(true);
         setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
+
+        // Check recommendation cache first — instant if available
+        if (lastItemAddedId != null) {
+            const cached = getCachedRecommendation(lastItemAddedId);
+            if (cached) {
+                console.log("[checkout] Cache hit for recommendation");
+                setUpsellLoading(false);
+                checkDisplayGatesAndRender(cached);
+                return;
+            }
+        }
+
+        // Show loading state — shimmer while fetching
+        setUpsellLoading(true);
 
         // Send FULL menu to backend — it handles all filtering
         rankCandidatesAI(state.menuItems, cartItems)
@@ -118,6 +131,11 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 if (!rec) {
                     setUpsellData(null);
                     return;
+                }
+
+                // Cache the result for future use
+                if (lastItemAddedId != null) {
+                    setCachedRecommendation(lastItemAddedId, rec);
                 }
 
                 checkDisplayGatesAndRender(rec);

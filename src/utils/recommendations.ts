@@ -7,6 +7,7 @@ export interface Item {
     discountedPrice?: string;
     popular: boolean;
     category: string;
+    image_url?: string;
     pairsWith?: string[]; // Legacy, kept for compatibility
 }
 
