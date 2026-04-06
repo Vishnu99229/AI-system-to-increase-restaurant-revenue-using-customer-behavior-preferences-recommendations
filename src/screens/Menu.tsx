@@ -1,13 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
+import { rankCandidatesAI } from "../utils/recommendations";
 import type { Item } from "../utils/recommendations";
+import { getCachedRecommendation, getCachedRecSync } from "../utils/recommendationCache";
 import { useApp } from "../contexts/AppContext";
-const UPSELL_TAGS = [
-    "🔥 Popular",
-    "❤️ Most loved",
-    "👨‍🍳 Chef's pick",
-    "🤝 Combo deal"
-];
 
 interface MenuProps {
     onBack: () => void;
@@ -58,25 +54,32 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const hasTrackedCurrentModal = useRef(false);
 
-    const precomputedRecs = useMemo(() => {
-        const map = new Map<number, { item: Item; tag: string }>();
-        if (!items.length) return map;
+    const [upsellData, setUpsellData] = useState<{ item: Item; tag: string } | null>(null);
 
+    useEffect(() => {
+        if (!items || items.length === 0) return;
+
+        // Prefetch real AI recommendations for every menu item, in parallel
+        // Each call hits /api/rank-upsell with the item as cart and full menu as candidates
         items.forEach((item) => {
-            const candidates = items.filter(i => i.id !== item.id && i.category !== item.category);
-            const pool = candidates.length > 0 ? candidates : items.filter(i => i.id !== item.id);
-
-            if (pool.length > 0) {
-                const recItem = pool[item.id % pool.length];
-                const tag = UPSELL_TAGS[item.id % UPSELL_TAGS.length];
-                map.set(item.id, { item: recItem, tag });
-            }
+            getCachedRecommendation(item.id, async () => {
+                try {
+                    const rec = await rankCandidatesAI(items, [item]);
+                    if (rec && rec.item) {
+                        return {
+                            item: rec.item,
+                            reason: rec.reason || "Recommended for you",
+                            candidate_pool_size: rec.candidate_pool_size
+                        };
+                    }
+                    return null;
+                } catch (err) {
+                    console.error(`[Menu] Prefetch failed for item ${item.id}`, err);
+                    return null;
+                }
+            });
         });
-
-        return map;
     }, [items]);
-
-    const upsellData = selectedItem ? precomputedRecs.get(selectedItem.id) : null;
 
     useEffect(() => {
         if (state.menuItems.length > 0) {
@@ -122,6 +125,33 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setQuantity(1);
         dispatch({ type: "ADD_VIEWED_ITEM", payload: item });
 
+        const cached = getCachedRecSync(item.id);
+        if (cached) {
+            setUpsellData({ item: cached.item, tag: cached.reason });
+        } else {
+            setUpsellData(null);
+            getCachedRecommendation(item.id, async () => {
+                try {
+                    const rec = await rankCandidatesAI(items, [item]);
+                    if (rec && rec.item) {
+                        return {
+                            item: rec.item,
+                            reason: rec.reason || "Recommended for you",
+                            candidate_pool_size: rec.candidate_pool_size
+                        };
+                    }
+                    return null;
+                } catch (err) {
+                    console.error(`[Menu] Fetch failed for item ${item.id}`, err);
+                    return null;
+                }
+            }).then(result => {
+                if (result) {
+                    setUpsellData({ item: result.item, tag: result.reason });
+                }
+            });
+        }
+
         const messages = [
             "{name}, our chef pairs this with every order like yours",
             "{name}, 8 out of 10 guests add {item} with this",
@@ -135,6 +165,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const closeDetail = () => {
         setSelectedItem(null);
+        setUpsellData(null);
         hasTrackedCurrentModal.current = false;
     };
 
