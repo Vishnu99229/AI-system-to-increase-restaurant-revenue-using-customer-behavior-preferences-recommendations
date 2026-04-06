@@ -2,8 +2,6 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
-import { Button } from "../components/Button";
-
 const UPSELL_TAGS = [
     "🔥 Popular",
     "❤️ Most loved",
@@ -56,6 +54,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [showAddedToast, setShowAddedToast] = useState(false);
+    const [modalMessage, setModalMessage] = useState("");
 
     const hasTrackedCurrentModal = useRef(false);
 
@@ -117,6 +116,16 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setSelectedItem(item);
         setQuantity(1);
         dispatch({ type: "ADD_VIEWED_ITEM", payload: item });
+
+        const messages = [
+            "{name}, our chef pairs this with every order like yours",
+            "{name}, 8 out of 10 guests add {item} with this",
+            "{name}, this is today's most loved combo",
+            "{name}, most of our guests club {item} with this item",
+            "{name}, this is the chef's recommended pairing",
+            "{name}, guests who order this always add {item}"
+        ];
+        setModalMessage(messages[Math.floor(Math.random() * messages.length)]);
     };
 
     const closeDetail = () => {
@@ -151,7 +160,12 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         closeDetail();
     };
 
-    const getPriceValue = (priceStr: string) => parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
+    const getPriceValue = (priceStr?: string) => parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
+
+    const nameStr = state.userName || "Hey";
+    const displayModalMessage = modalMessage
+        .replace("{name}", nameStr)
+        .replace("{item}", upsellData?.item.name || "");
 
     if (loading) {
         return (
@@ -265,20 +279,20 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                 </div>
                             )}
 
-                            <div className="mb-6 mt-2">
-                                <h2 className="text-3xl font-heading font-bold mb-2 text-dark">{selectedItem.name}</h2>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                            <div className="mb-2">
+                                <h2 className="text-lg font-bold mb-2 text-dark">{selectedItem.name}</h2>
+                                <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         {selectedItem.discountedPrice ? (
                                             <>
-                                                <p className="text-lg text-gray-400 font-medium line-through opacity-50">{selectedItem.originalPrice}</p>
-                                                <p className="text-xl font-bold text-[#E65C00]">{selectedItem.discountedPrice}</p>
+                                                <p className="text-sm text-gray-400 line-through opacity-50">₹{Math.round(getPriceValue(selectedItem.originalPrice))}</p>
+                                                <p className="text-[#FF6B35] font-semibold text-base">₹{Math.round(getPriceValue(selectedItem.discountedPrice))}</p>
                                             </>
                                         ) : (
-                                            <p className="text-xl text-highlight font-medium">{selectedItem.price}</p>
+                                            <p className="text-[#FF6B35] font-semibold text-base">₹{Math.round(getPriceValue(selectedItem.price))}</p>
                                         )}
                                     </div>
-                                    <div className="ml-auto flex items-center bg-white border border-gray-200 rounded-full shadow-sm p-1">
+                                    <div className="flex items-center bg-white border border-gray-200 rounded-full shadow-sm p-1">
                                         <button
                                             onClick={() => setQuantity(Math.max(1, quantity - 1))}
                                             className="w-8 h-8 rounded-full flex items-center justify-center text-dark hover:bg-gray-100 transition-colors"
@@ -294,42 +308,67 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                         </button>
                                     </div>
                                 </div>
-                                <div className="mt-3 text-lg font-bold text-dark">
-                                    Total: ₹{((selectedItem.discountedPrice ? getPriceValue(selectedItem.discountedPrice) : getPriceValue(selectedItem.price)) * quantity).toFixed(2).replace(/\.00$/, "")}
-                                </div>
                             </div>
 
-                            {/* 1-Line Recommendation Section */}
+                            {/* Combo Card Section */}
                             {upsellData && (
-                                <div className="border-t border-dashed border-gray-200 mt-6 pt-6">
-                                    <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 flex justify-between items-center shadow-sm">
-                                        <div className="flex-1 pr-2">
-                                            <span className="text-xs font-bold text-orange-600 mb-1 inline-block uppercase tracking-wide">
-                                                {upsellData.tag}
-                                            </span>
-                                            <h4 className="font-heading font-bold text-dark text-sm leading-tight">
-                                                {upsellData.item.name}
-                                            </h4>
-                                            <span className="text-sm font-bold text-highlight">{upsellData.item.price}</span>
+                                <div className="border-t border-dashed border-gray-200 mt-4 pt-4">
+                                    <p className="text-sm font-medium text-gray-700 mb-3">{displayModalMessage}</p>
+                                    
+                                    <div className="bg-orange-50/60 rounded-xl p-4 border border-orange-100">
+                                        <div className="flex items-center justify-center mb-3">
+                                            <span className="text-sm font-medium text-dark text-center truncate">{selectedItem.name}</span>
+                                            <span className="text-lg font-bold text-[#FF6B35] mx-2">+</span>
+                                            <span className="text-sm font-medium text-dark text-center truncate">{upsellData.item.name}</span>
                                         </div>
-                                        <button
-                                            onClick={() => handleAddBothToOrder(selectedItem, upsellData.item)}
-                                            className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-md transition-all active:scale-95 whitespace-nowrap"
-                                        >
-                                            Add
-                                        </button>
+
+                                        <div className="text-center">
+                                            <div className="text-xs text-gray-400 mb-0.5 inline-block">
+                                               ₹{Math.round(getPriceValue(selectedItem.discountedPrice || selectedItem.price))} + ₹{Math.round(getPriceValue(upsellData.item.discountedPrice || upsellData.item.price))}
+                                            </div>
+                                            <div className="text-base font-bold text-gray-800">
+                                                Both for ₹{Math.round(getPriceValue(selectedItem.discountedPrice || selectedItem.price) + getPriceValue(upsellData.item.discountedPrice || upsellData.item.price))}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            <div className="mt-8 space-y-3">
-                                <Button
-                                    onClick={() => handleAddToOrder(selectedItem)}
-                                    variant="primary"
-                                    fullWidth
-                                >
-                                    Add to Order
-                                </Button>
+                            <style>{`
+                                @keyframes gentle-pulse {
+                                    0% { transform: scale(1); }
+                                    50% { transform: scale(1.02); }
+                                    100% { transform: scale(1); }
+                                }
+                                .animate-gentle-pulse {
+                                    animation: gentle-pulse 600ms ease-in-out 1;
+                                }
+                            `}</style>
+
+                            <div className="mt-6">
+                                {upsellData ? (
+                                    <div className="flex flex-col gap-2">
+                                        <button
+                                            onClick={() => handleAddBothToOrder(selectedItem, upsellData.item)}
+                                            className="w-full py-3.5 bg-[#FF6B35] text-white font-bold rounded-xl text-base shadow-md shadow-orange-200/50 animate-gentle-pulse transition-transform active:scale-95"
+                                        >
+                                            Add Both to Order
+                                        </button>
+                                        <button
+                                            onClick={() => handleAddToOrder(selectedItem)}
+                                            className="w-full py-2.5 bg-orange-50 text-[#FF6B35] font-medium rounded-xl text-sm border border-orange-200 transition-transform active:scale-95"
+                                        >
+                                            Just this item
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => handleAddToOrder(selectedItem)}
+                                        className="w-full py-3.5 bg-[#FF6B35] text-white font-bold rounded-xl text-base shadow-md shadow-orange-200/50 transition-transform active:scale-95 flex justify-center items-center"
+                                    >
+                                        Add to Order
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>

@@ -31,6 +31,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
     const [showUpsell, setShowUpsell] = useState(false);
     const [upsellLoading, setUpsellLoading] = useState(false);
+    const [checkoutMessage, setCheckoutMessage] = useState("");
 
     // Track if we've already evaluated the upsell decision (once per checkout mount)
     const hasEvaluatedUpsell = useRef(false);
@@ -38,6 +39,14 @@ export default function Checkout({ onBack }: CheckoutProps) {
     // Safety guard: prevent state updates after unmount
     const isMounted = useRef(true);
     useEffect(() => {
+        const msgs = [
+            "{name}, most guests add this before placing their order",
+            "{name}, complete your meal with the chef's pick",
+            "{name}, don't miss today's most popular pairing",
+            "{name}, guests who ordered this also grabbed {item}"
+        ];
+        setCheckoutMessage(msgs[Math.floor(Math.random() * msgs.length)]);
+
         return () => {
             isMounted.current = false;
         };
@@ -237,6 +246,14 @@ export default function Checkout({ onBack }: CheckoutProps) {
         // Do NOT navigate, clear cart, or reset lastItemAddedId
     };
 
+    const nameStr = state.userName || "Hey";
+    const sourceItem = cartItems.find(i => i.id === state.lastItemAddedId);
+    const sourceItemName = sourceItem?.name || "Your order";
+    
+    const displayCheckoutMessage = checkoutMessage
+        .replace("{name}", nameStr)
+        .replace("{item}", upsellData?.item.name || "");
+
     return (
         <div className="min-h-screen bg-warm-bg flex flex-col max-w-md mx-auto relative shadow-[0_0_40px_rgba(0,0,0,0.05)] border-x border-gray-100">
             <div className="bg-warm-bg px-6 py-4 shadow-sm z-10 sticky top-0 border-b border-primary/10">
@@ -301,7 +318,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
                     {/* Optional Addition - Calm Upsell */}
                     {(showUpsell || upsellLoading) && (
                         <div className="mb-6 border-t border-gray-100 pt-5 animate-fade-in">
-                            <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">Recommended for you</p>
+                            <p className="text-sm font-medium text-gray-600 mb-3">{displayCheckoutMessage}</p>
 
                             {upsellLoading ? (
                                 <div className="space-y-3 mb-4">
@@ -314,46 +331,47 @@ export default function Checkout({ onBack }: CheckoutProps) {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="mb-4">
-                                    {(() => {
-                                        const tagLower = (upsellData as any)?.tag?.toLowerCase() || "";
-                                        let tagClass = "bg-orange-50 text-orange-600 border border-orange-200";
-                                        let tagText = (upsellData as any)?.tag || "🔥 Popular";
-                                        
-                                        if (tagLower.includes("love")) tagClass = "bg-red-50 text-red-600 border border-red-200";
-                                        else if (tagLower.includes("chef")) tagClass = "bg-amber-50 text-amber-700 border border-amber-200";
+                                <div className="bg-orange-50/60 rounded-xl p-4 border border-orange-100 mb-4">
+                                    <div className="flex items-center justify-center mb-3">
+                                        <span className="text-sm font-medium text-dark text-center truncate">{sourceItemName}</span>
+                                        <span className="text-lg font-bold text-[#FF6B35] mx-2">+</span>
+                                        <span className="text-sm font-medium text-dark text-center truncate">{upsellData?.item.name}</span>
+                                    </div>
 
-                                        return (
-                                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium inline-block mb-3 ${tagClass}`}>
-                                                {tagText}
-                                            </span>
-                                        );
-                                    })()}
-
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <h4 className="font-medium text-sm text-dark">{upsellData?.item.name}</h4>
-                                            <p className="text-sm text-[#FF6B35] font-semibold">₹{upsellData ? Math.round(parsePrice(upsellData.item.price)) : 0}</p>
+                                    <div className="text-center">
+                                        <div className="text-xs text-gray-400 mb-0.5 inline-block">
+                                           ₹{Math.round(parsePrice(sourceItem?.price || "0"))} + ₹{Math.round(upsellData ? parsePrice(upsellData.item.price) : 0)}
                                         </div>
-                                        <div className="w-8 h-8 rounded-full bg-orange-50 text-orange-600 border border-orange-200 flex items-center justify-center font-medium shadow-sm">
-                                            +
+                                        <div className="text-base font-bold text-gray-800">
+                                            Both for ₹{Math.round(parsePrice(sourceItem?.price || "0")) + Math.round(upsellData ? parsePrice(upsellData.item.price) : 0)}
                                         </div>
                                     </div>
                                 </div>
                             )}
 
+                            <style>{`
+                                @keyframes checkout-pulse {
+                                    0% { transform: scale(1); }
+                                    50% { transform: scale(1.02); }
+                                    100% { transform: scale(1); }
+                                }
+                                .animate-checkout-pulse {
+                                    animation: checkout-pulse 600ms ease-in-out 1;
+                                }
+                            `}</style>
+
                             <div className="flex flex-col gap-2 mt-2">
                                 <button
                                     onClick={handleAddUpsell}
                                     disabled={upsellLoading}
-                                    className="w-full py-3 bg-[#FF6B35] text-white font-semibold rounded-xl text-base shadow-md shadow-orange-200 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-center"
+                                    className="w-full py-3.5 bg-[#FF6B35] text-white font-bold rounded-xl text-base shadow-md shadow-orange-200/50 animate-checkout-pulse transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-center"
                                 >
-                                    Add to Order
+                                    Add Both to Order
                                 </button>
                                 <button
                                     onClick={handleDismissUpsell}
                                     disabled={upsellLoading}
-                                    className="w-full py-2.5 bg-white text-gray-600 font-medium rounded-xl text-sm border border-gray-200 transition-transform active:scale-95 disabled:opacity-50 text-center"
+                                    className="w-full py-2.5 bg-orange-50 text-[#FF6B35] font-medium rounded-xl text-sm border border-orange-200 transition-transform active:scale-95 disabled:opacity-50 text-center"
                                 >
                                     Just my order
                                 </button>
