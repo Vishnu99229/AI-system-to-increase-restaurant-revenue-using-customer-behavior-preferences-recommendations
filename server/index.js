@@ -601,28 +601,33 @@ app.post("/api/rank-upsell", async (req, res) => {
             return res.status(400).json({ error: "No valid candidates" });
         }
 
-        // --- Complementary category filtering ---
-        // Food (main/side) -> recommend Beverages or Dessert
-        // Beverages        -> recommend Food or Dessert
-        // Dessert          -> recommend Beverages only
+        // --- Complementary Category Filter ---
+        // Food (burger, wrap, breakfast, fries) -> recommend Beverages or Dessert
+        // Beverages (coffee, juice, smoothie) -> recommend Food or Dessert
+        // Dessert (brownie, muffin, ice cream) -> recommend Beverages only
         const primaryCategory = primaryItem.category || "";
+        console.log(`[rank-upsell] Primary category: "${primaryCategory}"`);
+
         const COMPLEMENTARY_MAP = {
-            "Food":      ["Beverages", "Dessert"],
+            "Food": ["Beverages", "Dessert"],
             "Beverages": ["Food", "Dessert"],
-            "Dessert":   ["Beverages"]
+            "Dessert": ["Beverages"]
         };
+
         const allowedCategories = COMPLEMENTARY_MAP[primaryCategory];
+
         if (allowedCategories && allowedCategories.length > 0) {
             const complementaryPool = candidatePool.filter(
                 item => allowedCategories.includes(item.category)
             );
-            // Only apply if it leaves at least one candidate; otherwise keep full pool
+            console.log(`[rank-upsell] Complementary filter: ${candidatePool.length} -> ${complementaryPool.length} candidates`);
             if (complementaryPool.length > 0) {
                 candidatePool = complementaryPool;
-                console.log(`[rank-upsell] Complementary filter applied for category "${primaryCategory}": ${candidatePool.length} candidates remain`);
             } else {
-                console.warn(`[rank-upsell] Complementary filter would have emptied pool for "${primaryCategory}", skipping filter`);
+                console.warn("[rank-upsell] No complementary candidates found, keeping full pool as fallback");
             }
+        } else {
+            console.warn(`[rank-upsell] No complementary mapping for category "${primaryCategory}", keeping full pool`);
         }
 
         // Shuffle the entire pool before slicing
