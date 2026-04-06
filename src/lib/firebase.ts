@@ -1,43 +1,42 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import type { FirebaseApp } from "firebase/app";
-import type { Auth } from "firebase/auth";
 
-/**
- * Centralized Firebase configuration guard.
- *
- * Reads env vars, validates them, and only initializes Firebase if ALL
- * required values are present. When Firebase is not configured, the app
- * boots normally with phone auth disabled — no crashes, no white screens.
- */
+// --- Step 2: Debug log raw env values BEFORE init ---
+console.log("[Firebase Debug] Config:", {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+});
 
-const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
-const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-
-const isConfigValid =
-    typeof apiKey === "string" && apiKey.length > 0 &&
-    typeof authDomain === "string" && authDomain.length > 0 &&
-    typeof projectId === "string" && projectId.length > 0;
-
-let firebaseApp: FirebaseApp | null = null;
-let firebaseAuth: Auth | null = null;
-
-if (isConfigValid) {
-    firebaseApp = initializeApp({ apiKey, authDomain, projectId });
-    firebaseAuth = getAuth(firebaseApp);
-} else {
-    console.warn(
-        "Firebase not configured. Phone auth disabled. " +
-        "Set VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID in .env to enable."
+// --- Step 3: Validation guard ---
+if (
+    !import.meta.env.VITE_FIREBASE_API_KEY ||
+    !import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
+    !import.meta.env.VITE_FIREBASE_PROJECT_ID
+) {
+    console.error(
+        "CRITICAL: Firebase env variables missing. " +
+        "Ensure VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID " +
+        "are set in .env (local) or Vercel Environment Variables (production)."
     );
 }
 
-/** true when Firebase was successfully initialized */
-export const isFirebaseConfigured: boolean = isConfigValid && firebaseApp !== null;
+// --- Step 4: authDomain format check ---
+const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "";
+if (authDomain && !authDomain.endsWith(".firebaseapp.com")) {
+    console.warn(
+        `[Firebase] WARNING: authDomain "${authDomain}" does not end with .firebaseapp.com. ` +
+        `Expected format: "<project-id>.firebaseapp.com"`
+    );
+}
 
-/** Firebase Auth instance — null when not configured */
-export const auth: Auth | null = firebaseAuth;
+const firebaseConfig = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+};
 
-/** Firebase App instance — null when not configured */
-export { firebaseApp };
+const app = initializeApp(firebaseConfig);
+
+export const auth = getAuth(app);
+

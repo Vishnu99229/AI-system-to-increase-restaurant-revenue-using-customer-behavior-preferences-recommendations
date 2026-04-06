@@ -4,19 +4,7 @@ import { rankCandidatesAI } from "../utils/recommendations";
 import { trackUpsellShown, trackUpsellEvent, trackOrderComplete } from "../utils/api";
 import type { Recommendation } from "../utils/recommendations";
 import { Button } from "../components/Button";
-import { getCachedRecommendation, setCachedRecommendation } from "../utils/recommendationCache";
 import PhoneVerificationModal from "../components/PhoneVerificationModal";
-
-const UPSELL_HEADERS = [
-    "Recommended by our chef for this order",
-    "Most loved pairing by our guests",
-    "A popular combination in our cafe",
-    "Most paired item with this order",
-    "Guests often add this with your selection",
-    "One of the most ordered pairings today",
-    "Our chef's favorite pairing for this item",
-    "Highly recommended with your order"
-];
 
 interface CheckoutProps {
     onBack: () => void;
@@ -43,7 +31,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
     const [showUpsell, setShowUpsell] = useState(false);
     const [upsellLoading, setUpsellLoading] = useState(false);
-    const [upsellHeader, setUpsellHeader] = useState("");
 
     // Track if we've already evaluated the upsell decision (once per checkout mount)
     const hasEvaluatedUpsell = useRef(false);
@@ -105,20 +92,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
             }
         };
 
-        setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
-
-        // Check recommendation cache first — instant if available
-        if (lastItemAddedId != null) {
-            const cached = getCachedRecommendation(lastItemAddedId);
-            if (cached) {
-                console.log("[checkout] Cache hit for recommendation");
-                setUpsellLoading(false);
-                checkDisplayGatesAndRender(cached);
-                return;
-            }
-        }
-
-        // Show loading state — shimmer while fetching
+        // Show loading state immediately so the card renders with shimmer
         setUpsellLoading(true);
 
         // Send FULL menu to backend — it handles all filtering
@@ -131,11 +105,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 if (!rec) {
                     setUpsellData(null);
                     return;
-                }
-
-                // Cache the result for future use
-                if (lastItemAddedId != null) {
-                    setCachedRecommendation(lastItemAddedId, rec);
                 }
 
                 checkDisplayGatesAndRender(rec);
@@ -178,8 +147,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
     }, [showUpsell, upsellLoading]);
 
 
-    const subtotal = cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0);
-    const tax = subtotal * 0.05;
+    const subtotal = Math.round(cartItems.reduce((acc, item) => acc + parsePrice(item.price), 0));
+    const tax = Math.round(subtotal * 0.05);
     const total = subtotal + tax;
 
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -269,7 +238,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     };
 
     return (
-        <div className="min-h-screen bg-warm-bg flex flex-col pb-[350px]">
+        <div className="min-h-screen bg-warm-bg flex flex-col max-w-md mx-auto relative shadow-[0_0_40px_rgba(0,0,0,0.05)] border-x border-gray-100">
             <div className="bg-warm-bg px-6 py-4 shadow-sm z-10 sticky top-0 border-b border-primary/10">
                 <button
                     onClick={onBack}
@@ -307,7 +276,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
                                     <h3 className="font-heading font-bold text-lg text-dark">{item.name}</h3>
                                 </div>
                                 <div className="flex items-center gap-3">
-                                    <span className="font-medium text-highlight font-body">{item.price}</span>
+                                    <span className="font-medium text-highlight font-body">₹{Math.round(parsePrice(item.price))}</span>
                                     <button
                                         onClick={() => dispatch({ type: "REMOVE_FROM_CART", payload: item.id })}
                                         className="text-gray-400 hover:text-red-500 transition-colors p-1"
@@ -327,66 +296,83 @@ export default function Checkout({ onBack }: CheckoutProps) {
             </div>
 
             {cartItems.length > 0 && (
-                <div className="fixed bottom-0 left-0 right-0 z-40 bg-white px-6 py-6 sm:py-8 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] rounded-t-3xl sm:rounded-t-none">
+                <div className="sticky bottom-0 z-40 bg-white px-6 py-6 sm:py-8 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] rounded-t-3xl sm:rounded-none mt-auto">
 
                     {/* Optional Addition - Calm Upsell */}
                     {(showUpsell || upsellLoading) && (
-                        <div className="mb-8 bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in shadow-[0_0_15px_rgba(244,196,48,0.15)]">
-                            <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-heading font-bold text-dark text-lg">
-                                    {upsellHeader}
-                                </h3>
-                            </div>
+                        <div className="mb-6 border-t border-gray-100 pt-5 animate-fade-in">
+                            <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">Recommended for you</p>
 
                             {upsellLoading ? (
-                                <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse mb-4" />
+                                <div className="space-y-3 mb-4">
+                                    <div className="h-6 w-24 bg-gray-100 rounded-full animate-pulse" />
+                                    <div className="flex items-center justify-between">
+                                        <div className="space-y-2">
+                                            <div className="h-4 w-32 bg-gray-100 rounded animate-pulse" />
+                                            <div className="h-3 w-16 bg-gray-100 rounded animate-pulse" />
+                                        </div>
+                                    </div>
+                                </div>
                             ) : (
-                                <p className="text-sm text-dark/80 mb-4 font-body leading-relaxed">{upsellData?.reason}</p>
+                                <div className="mb-4">
+                                    {(() => {
+                                        const tagLower = (upsellData as any)?.tag?.toLowerCase() || "";
+                                        let tagClass = "bg-orange-50 text-orange-600 border border-orange-200";
+                                        let tagText = (upsellData as any)?.tag || "🔥 Popular";
+                                        
+                                        if (tagLower.includes("love")) tagClass = "bg-red-50 text-red-600 border border-red-200";
+                                        else if (tagLower.includes("chef")) tagClass = "bg-amber-50 text-amber-700 border border-amber-200";
+
+                                        return (
+                                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium inline-block mb-3 ${tagClass}`}>
+                                                {tagText}
+                                            </span>
+                                        );
+                                    })()}
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <h4 className="font-medium text-sm text-dark">{upsellData?.item.name}</h4>
+                                            <p className="text-sm text-[#FF6B35] font-semibold">₹{upsellData ? Math.round(parsePrice(upsellData.item.price)) : 0}</p>
+                                        </div>
+                                        <div className="w-8 h-8 rounded-full bg-orange-50 text-orange-600 border border-orange-200 flex items-center justify-center font-medium shadow-sm">
+                                            +
+                                        </div>
+                                    </div>
+                                </div>
                             )}
 
-                            <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-primary/10 mb-4 shadow-sm">
-                                {upsellLoading ? (
-                                    <div className="flex-1 space-y-2">
-                                        <div className="h-4 w-1/2 bg-gray-200 rounded animate-pulse" />
-                                        <div className="h-3 w-1/4 bg-gray-200 rounded animate-pulse" />
-                                    </div>
-                                ) : (
-                                    <div>
-                                        <p className="font-heading font-bold text-dark">{upsellData?.item.name}</p>
-                                        <p className="text-sm text-highlight font-bold">{upsellData?.item.price}</p>
-                                    </div>
-                                )}
+                            <div className="flex flex-col gap-2 mt-2">
                                 <button
                                     onClick={handleAddUpsell}
                                     disabled={upsellLoading}
-                                    className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full py-3 bg-[#FF6B35] text-white font-semibold rounded-xl text-base shadow-md shadow-orange-200 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-center"
                                 >
-                                    Add
+                                    Add to Order
+                                </button>
+                                <button
+                                    onClick={handleDismissUpsell}
+                                    disabled={upsellLoading}
+                                    className="w-full py-2.5 bg-white text-gray-600 font-medium rounded-xl text-sm border border-gray-200 transition-transform active:scale-95 disabled:opacity-50 text-center"
+                                >
+                                    Just my order
                                 </button>
                             </div>
-
-                            <button
-                                onClick={handleDismissUpsell}
-                                disabled={upsellLoading}
-                                className="w-full text-center text-xs text-gray-400 hover:text-dark transition-colors font-medium uppercase tracking-wide disabled:opacity-50"
-                            >
-                                No thanks, just my order
-                            </button>
                         </div>
                     )}
 
                     <div className="space-y-3 mb-8 text-sm text-dark/80 font-medium">
                         <div className="flex justify-between">
                             <span>Subtotal</span>
-                            <span className="font-bold">₹{subtotal.toFixed(2)}</span>
+                            <span className="font-bold">₹{Math.round(subtotal)}</span>
                         </div>
                         <div className="flex justify-between">
                             <span>Tax (5%)</span>
-                            <span>₹{tax.toFixed(2)}</span>
+                            <span>₹{Math.round(tax)}</span>
                         </div>
                         <div className="flex justify-between text-2xl font-heading font-bold text-dark border-t border-dashed border-gray-200 pt-4 mt-4">
                             <span>Total</span>
-                            <span>₹{total.toFixed(2)}</span>
+                            <span>₹{Math.round(total)}</span>
                         </div>
                     </div>
 

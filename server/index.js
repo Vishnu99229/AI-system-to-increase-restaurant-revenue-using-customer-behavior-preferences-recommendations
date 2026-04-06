@@ -144,14 +144,14 @@ const pool = new Pool({
             if (parseInt(menuCountRes.rows[0].count, 10) === 0) {
                 console.log("🌱 Local Dev: menus table is empty. Seeding test data...");
                 const seedItems = [
-                    { name: 'Cold Coffee', price: 180, category: 'Beverages', sub_category: 'coffee', tags: ['coffee', 'cold', 'drink'], img: '/images/menu/cold-coffee.png' },
-                    { name: 'Cappuccino', price: 200, category: 'Beverages', sub_category: 'coffee', tags: ['coffee', 'hot', 'drink'], img: '/images/menu/cappuccino.png' },
-                    { name: 'Croissant', price: 150, category: 'Food', sub_category: 'pastry', tags: ['bakery', 'pastry', 'breakfast'], img: '/images/menu/croissant.png' },
-                    { name: 'Choco Muffin', price: 120, category: 'Dessert', sub_category: 'bakery', tags: ['chocolate', 'bakery', 'sweet'], img: '/images/menu/choco-muffin.png' },
-                    { name: 'Chocolate Brownie', price: 160, category: 'Dessert', sub_category: 'bakery', tags: ['chocolate', 'bakery', 'sweet'], img: '/images/menu/chocolate-brownie.png' },
-                    { name: 'Vanilla Ice Cream', price: 140, category: 'Dessert', sub_category: 'ice-cream', tags: ['frozen', 'sweet', 'vanilla'], img: '/images/menu/vanilla-ice-cream.png' },
-                    { name: 'Paneer Tikka Wrap', price: 220, category: 'Food', sub_category: 'main', tags: ['main', 'savory', 'wrap'], img: '/images/menu/paneer-tikka-wrap.png' },
-                    { name: 'French Fries', price: 100, category: 'Food', sub_category: 'side', tags: ['side', 'snack', 'fried'], img: '/images/menu/french-fries.png' }
+                    { name: 'Cold Coffee', price: 180, category: 'Beverages', sub_category: 'coffee', tags: ['coffee', 'cold', 'drink'], img: 'https://images.unsplash.com/photo-1578314675249-a6910f80cc4e?w=800' },
+                    { name: 'Cappuccino', price: 200, category: 'Beverages', sub_category: 'coffee', tags: ['coffee', 'hot', 'drink'], img: 'https://images.unsplash.com/photo-1572442388796-11668a67e53d?w=800' },
+                    { name: 'Croissant', price: 150, category: 'Food', sub_category: 'pastry', tags: ['bakery', 'pastry', 'breakfast'], img: 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=800' },
+                    { name: 'Choco Muffin', price: 120, category: 'Dessert', sub_category: 'bakery', tags: ['chocolate', 'bakery', 'sweet'], img: 'https://images.unsplash.com/photo-1606890737304-57a1ca8a5b62?w=800' },
+                    { name: 'Chocolate Brownie', price: 160, category: 'Dessert', sub_category: 'bakery', tags: ['chocolate', 'bakery', 'sweet'], img: 'https://images.unsplash.com/photo-1607920591413-4ec007e70023?w=800' },
+                    { name: 'Vanilla Ice Cream', price: 140, category: 'Dessert', sub_category: 'ice-cream', tags: ['frozen', 'sweet', 'vanilla'], img: 'https://images.unsplash.com/photo-1570197571499-166b36435e9f?w=800' },
+                    { name: 'Paneer Tikka Wrap', price: 220, category: 'Food', sub_category: 'main', tags: ['main', 'savory', 'wrap'], img: 'https://images.unsplash.com/photo-1626700051175-6818013e1d4f?w=800' },
+                    { name: 'French Fries', price: 100, category: 'Food', sub_category: 'side', tags: ['side', 'snack', 'fried'], img: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?w=800' }
                 ];
 
                 for (const item of seedItems) {
