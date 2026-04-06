@@ -109,6 +109,11 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                 candidate_pool_size: items.length
             });
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
+            // Cache this recommendation so Checkout can use it without a fresh API call
+            dispatch({
+                type: "SET_LAST_RECOMMENDATION",
+                payload: { item: upsellData.item, reason: upsellData.tag }
+            });
         }
     }, [selectedItem, upsellData]);
 

@@ -544,7 +544,7 @@ app.post("/api/rank-upsell", async (req, res) => {
             const ids = candidates.map(c => c.id).filter(Boolean);
             if (ids.length > 0) {
                 const dbResult = await pool.query(
-                    "SELECT id, sub_category, tags FROM menus WHERE id = ANY($1)",
+                    "SELECT id, category, sub_category, tags FROM menus WHERE id = ANY($1)",
                     [ids]
                 );
                 const dbMap = {};
@@ -553,6 +553,7 @@ app.post("/api/rank-upsell", async (req, res) => {
                 }
                 enrichedCandidates = candidates.map(c => ({
                     ...c,
+                    category: c.category || dbMap[c.id]?.category || null,
                     sub_category: c.sub_category || dbMap[c.id]?.sub_category || null,
                     tags: c.tags || dbMap[c.id]?.tags || []
                 }));
@@ -567,7 +568,7 @@ app.post("/api/rank-upsell", async (req, res) => {
             const cartIds = safeCartItems.map(c => c.id).filter(Boolean);
             if (cartIds.length > 0) {
                 const dbResult = await pool.query(
-                    "SELECT id, sub_category, tags FROM menus WHERE id = ANY($1)",
+                    "SELECT id, category, sub_category, tags FROM menus WHERE id = ANY($1)",
                     [cartIds]
                 );
                 const dbMap = {};
@@ -576,6 +577,7 @@ app.post("/api/rank-upsell", async (req, res) => {
                 }
                 enrichedCartItems = safeCartItems.map(c => ({
                     ...c,
+                    category: c.category || dbMap[c.id]?.category || null,
                     sub_category: c.sub_category || dbMap[c.id]?.sub_category || null,
                     tags: c.tags || dbMap[c.id]?.tags || []
                 }));
@@ -586,6 +588,7 @@ app.post("/api/rank-upsell", async (req, res) => {
 
         // --- Candidate Generation (minimal deterministic algorithm) ---
         // Only two rules: exclude primary item & exclude items already in cart
+        const primaryItem = enrichedCartItems[0] || {};
         const cartItemIds = new Set(enrichedCartItems.map(i => i.id));
 
         let candidatePool = enrichedCandidates.filter(item => {
@@ -598,6 +601,30 @@ app.post("/api/rank-upsell", async (req, res) => {
             return res.status(400).json({ error: "No valid candidates" });
         }
 
+        // --- Complementary category filtering ---
+        // Food (main/side) -> recommend Beverages or Dessert
+        // Beverages        -> recommend Food or Dessert
+        // Dessert          -> recommend Beverages only
+        const primaryCategory = primaryItem.category || "";
+        const COMPLEMENTARY_MAP = {
+            "Food":      ["Beverages", "Dessert"],
+            "Beverages": ["Food", "Dessert"],
+            "Dessert":   ["Beverages"]
+        };
+        const allowedCategories = COMPLEMENTARY_MAP[primaryCategory];
+        if (allowedCategories && allowedCategories.length > 0) {
+            const complementaryPool = candidatePool.filter(
+                item => allowedCategories.includes(item.category)
+            );
+            // Only apply if it leaves at least one candidate; otherwise keep full pool
+            if (complementaryPool.length > 0) {
+                candidatePool = complementaryPool;
+                console.log(`[rank-upsell] Complementary filter applied for category "${primaryCategory}": ${candidatePool.length} candidates remain`);
+            } else {
+                console.warn(`[rank-upsell] Complementary filter would have emptied pool for "${primaryCategory}", skipping filter`);
+            }
+        }
+
         // Shuffle the entire pool before slicing
         candidatePool = candidatePool
             .map(x => ({ x, r: Math.random() }))
@@ -607,8 +634,8 @@ app.post("/api/rank-upsell", async (req, res) => {
         // Slice to max 10
         const finalCandidates = candidatePool.slice(0, 10);
 
-        const primaryItem = enrichedCartItems[0] || {};
-        console.log(`[rank-upsell] primary item: ${primaryItem.name || 'Unknown'}`);
+        const primaryItemForLog = enrichedCartItems[0] || {};
+        console.log(`[rank-upsell] primary item: ${primaryItemForLog.name || 'Unknown'}`);
         console.log(`[rank-upsell] candidate pool size: ${finalCandidates.length}`);
         console.log(`[rank-upsell] candidates: ${JSON.stringify(finalCandidates.map(c => c.name))}`);
 

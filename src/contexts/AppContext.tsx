@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useReducer } from "react";
 import type { ReactNode } from "react";
-import type { Item } from "../utils/recommendations";
+import type { Item, Recommendation } from "../utils/recommendations";
 
 // --- State Definition ---
 
@@ -38,6 +38,7 @@ export interface AppState {
     checkoutUpsellShownByItemId: Record<number, boolean>;
     menuUpsellItemPrice: number;
     menuItems: Item[];
+    lastRecommendation: Recommendation | null;
     upsellMetrics: UpsellMetrics;
 }
 
@@ -65,6 +66,7 @@ const initialState: AppState = {
     checkoutUpsellShownByItemId: {},
     menuUpsellItemPrice: 0,
     menuItems: [],
+    lastRecommendation: null,
     upsellMetrics: {
         pairingShownCount: 0,
         pairingAcceptedCount: 0,
@@ -92,6 +94,7 @@ export type AppAction =
     | { type: "INCREMENT_UPSELL_METRIC"; payload: keyof UpsellMetrics }
     | { type: "SET_MENU_UPSELL_ITEM_PRICE"; payload: number }
     | { type: "SET_MENU_ITEMS"; payload: Item[] }
+    | { type: "SET_LAST_RECOMMENDATION"; payload: Recommendation | null }
     | { type: "SET_TABLE_INFO"; payload: { restaurantId: string; tableNumber: string } }
     | { type: "RESET_SESSION_AFTER_ORDER" }
     | { type: "LOGOUT" };
@@ -151,6 +154,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
             return { ...state, menuUpsellItemPrice: action.payload };
         case "SET_MENU_ITEMS":
             return { ...state, menuItems: action.payload };
+        case "SET_LAST_RECOMMENDATION":
+            return { ...state, lastRecommendation: action.payload };
         case "SET_TABLE_INFO":
             return {
                 ...state,
@@ -169,6 +174,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                 pairingAcceptedByItemId: {},
                 checkoutUpsellShownByItemId: {},
                 menuUpsellItemPrice: 0,
+                lastRecommendation: null,
                 // restaurantId/tableNumber persist — table is locked for the session
                 // upsellMetrics are session-level and persist across orders
             };
@@ -221,6 +227,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     checkoutUpsellShownByItemId: parsed.checkoutUpsellShownByItemId ?? {},
                     menuUpsellItemPrice: parsed.menuUpsellItemPrice ?? 0,
                     menuItems: parsed.menuItems ?? [],
+                    lastRecommendation: parsed.lastRecommendation ?? null,
                     upsellMetrics: parsed.upsellMetrics ?? {
                         pairingShownCount: 0,
                         pairingAcceptedCount: 0,

@@ -72,9 +72,6 @@ export default function Checkout({ onBack }: CheckoutProps) {
         if (hasEvaluatedUpsell.current) return;
         hasEvaluatedUpsell.current = true;
 
-        // No menu items mean no upsell candidates possible
-        if (!state.menuItems || state.menuItems.length === 0) return;
-
         // Helper to check display gates when we are ready to render
         const checkDisplayGatesAndRender = (finalRec: Recommendation) => {
             if (!isMounted.current) return;
@@ -101,7 +98,21 @@ export default function Checkout({ onBack }: CheckoutProps) {
             }
         };
 
-        // Show loading state immediately so the card renders with shimmer
+        // 1. Try to use cached recommendation from menu modal — instant render, no API call
+        if (state.lastRecommendation && state.lastRecommendation.item) {
+            const rec = state.lastRecommendation;
+            const alreadyInCart = cartItems.some(ci => ci.id === rec.item.id);
+            if (!alreadyInCart) {
+                console.log("[Checkout] Using cached recommendation from menu modal");
+                checkDisplayGatesAndRender(rec);
+                return; // No API call needed
+            }
+        }
+
+        // 2. Fall back to API call only if no cached recommendation or it was added to cart
+        if (!state.menuItems || state.menuItems.length === 0) return;
+
+        // Show loading state only when we need the API call
         setUpsellLoading(true);
 
         // Send FULL menu to backend — it handles all filtering
@@ -123,6 +134,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
 
                 console.error("[Dev] AI Ranking: Error", err);
                 setUpsellLoading(false);
+
                 setUpsellData(null);
             });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
