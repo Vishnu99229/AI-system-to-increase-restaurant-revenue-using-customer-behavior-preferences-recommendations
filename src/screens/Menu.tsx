@@ -55,7 +55,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
-    const [showAddedToast, setShowAddedToast] = useState(false);
 
     const hasTrackedCurrentModal = useRef(false);
 
@@ -128,9 +127,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         for (let i = 0; i < quantity; i++) {
             dispatch({ type: "ADD_TO_CART", payload: item });
         }
-        setShowAddedToast(true);
-        setTimeout(() => setShowAddedToast(false), 2000);
-        closeDetail();
+        
     };
 
     const handleAddBothToOrder = (mainItem: Item, recItem: Item) => {
