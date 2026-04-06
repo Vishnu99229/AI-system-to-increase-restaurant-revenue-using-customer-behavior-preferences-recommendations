@@ -251,7 +251,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     };
 
     return (
-        <div className="min-h-screen bg-warm-bg flex flex-col">
+        <div className="min-h-screen bg-warm-bg flex flex-col pb-[350px]">
             <div className="bg-warm-bg px-6 py-4 shadow-sm z-10 sticky top-0 border-b border-primary/10">
                 <button
                     onClick={onBack}
@@ -309,7 +309,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
             </div>
 
             {cartItems.length > 0 && (
-                <div className="bg-white px-6 py-8 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl relative z-20">
+                <div className="fixed bottom-0 left-0 right-0 z-40 bg-white px-6 py-6 sm:py-8 shadow-[0_-10px_30px_rgba(0,0,0,0.1)] rounded-t-3xl sm:rounded-t-none">
 
                     {/* Optional Addition - Calm Upsell */}
                     {(showUpsell || upsellLoading) && (
@@ -341,7 +341,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
                                 <button
                                     onClick={handleAddUpsell}
                                     disabled={upsellLoading}
-                                    className="bg-primary/10 hover:bg-primary/20 text-dark border border-primary/20 px-4 py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     Add
                                 </button>

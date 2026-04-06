@@ -1,20 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import { rankCandidatesAI } from "../utils/recommendations";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
-import type { Item, Recommendation } from "../utils/recommendations";
+import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
 import { Button } from "../components/Button";
 
-const UPSELL_HEADERS = [
-    "Recommended by our chef for this order",
-    "Most loved pairing by our guests",
-    "A popular combination in our cafe",
-    "Most paired item with this order",
-    "Guests often add this with your selection",
-    "One of the most ordered pairings today",
-    "Our chef's favorite pairing for this item",
-    "Highly recommended with your order"
+const UPSELL_TAGS = [
+    "🔥 Popular",
+    "❤️ Most liked",
+    "👨‍🍳 Chef's pick",
+    "🤝 Combo deal"
 ];
+
 
 interface MenuProps {
     onBack: () => void;
@@ -34,21 +30,25 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     // Guard: fires once per modal open, resets when modal closes
     const hasTrackedCurrentModal = useRef(false);
 
-    // Single GPT recommendation state — shimmer while loading, final reason when resolved
-    const [upsellData, setUpsellData] = useState<Recommendation | null>(null);
-    const [upsellLoading, setUpsellLoading] = useState(false);
-    const [upsellHeader, setUpsellHeader] = useState("");
+    // Precompute local recommendations on menu load
+    const precomputedRecs = useMemo(() => {
+        const map = new Map<number, { item: Item; tag: string }>();
+        if (!items.length) return map;
+        
+        items.forEach((item) => {
+            const candidates = items.filter(i => i.id !== item.id && i.category !== item.category);
+            const pool = candidates.length > 0 ? candidates : items.filter(i => i.id !== item.id);
+            
+            if (pool.length > 0) {
+                const recItem = pool[item.id % pool.length];
+                const tag = UPSELL_TAGS[item.id % UPSELL_TAGS.length];
+                map.set(item.id, { item: recItem, tag });
+            }
+        });
+        return map;
+    }, [items]);
 
-    // Safety guard: prevent ranking being called twice for the same item
-    const rankCalledFor = useRef<number | null>(null);
-
-    // Safety guard: prevent state updates after unmount
-    const isMounted = useRef(true);
-    useEffect(() => {
-        return () => {
-            isMounted.current = false;
-        };
-    }, []);
+    const upsellData = selectedItem ? precomputedRecs.get(selectedItem.id) : null;
 
     // Fetch menu on mount if not already loaded
     useEffect(() => {
@@ -71,57 +71,20 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         });
     }, [state.restaurantId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // When selectedItem changes: compute candidates, call rankCandidatesAI once
+    // Track upsell shown — only fires once per modal
     useEffect(() => {
-        // Reset upsell state whenever selection changes
-        setUpsellData(null);
-        setUpsellLoading(false);
-        rankCalledFor.current = null;
-
-        if (!selectedItem) return;
-        if (items.length === 0) return;
-
-        // Guard: only call ranking once per selected item
-        if (rankCalledFor.current === selectedItem.id) return;
-        rankCalledFor.current = selectedItem.id;
-
-        // Show shimmer immediately
-        setUpsellLoading(true);
-        setUpsellHeader(UPSELL_HEADERS[Math.floor(Math.random() * UPSELL_HEADERS.length)]);
-
-        // Send the FULL menu to the backend — it handles all filtering
-        rankCandidatesAI(items, [selectedItem, ...state.cartItems]).then(rec => {
-            if (!isMounted.current) return;
-
-            setUpsellLoading(false);
-
-            if (!rec) {
-                setUpsellData(null);
-                return;
-            }
-
-            setUpsellData(rec);
-        }).catch(() => {
-            if (!isMounted.current) return;
-            setUpsellLoading(false);
-            setUpsellData(null);
-        });
-    }, [selectedItem?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Track upsell shown — only fires once per modal, only after GPT resolves
-    useEffect(() => {
-        if (upsellData && !upsellLoading && !hasTrackedCurrentModal.current) {
+        if (selectedItem && upsellData && !hasTrackedCurrentModal.current) {
             hasTrackedCurrentModal.current = true;
             trackUpsellShown({
                 restaurant_slug: state.restaurantId,
                 table_number: state.tableNumber || "",
                 item_id: upsellData.item.id,
-                cart_value: 0, // In menu up-sell we could compute cart if needed, omitted here
-                candidate_pool_size: upsellData.candidate_pool_size || 0
+                cart_value: 0,
+                candidate_pool_size: items.length
             });
             dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "pairingShownCount" });
         }
-    }, [upsellData, upsellLoading, dispatch, state.restaurantId, state.tableNumber]);
+    }, [selectedItem, upsellData, dispatch, state.restaurantId, state.tableNumber, items.length]);
 
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);
@@ -131,10 +94,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const closeDetail = () => {
         setSelectedItem(null);
-        setUpsellData(null);
-        setUpsellLoading(false);
         hasTrackedCurrentModal.current = false; // Reset for next modal open
-        rankCalledFor.current = null;
     };
 
     const handleAddToOrder = (item: Item) => {
@@ -256,15 +216,15 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
             {/* Item Detail Modal */}
             {selectedItem && (
-                <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center pointer-events-none">
+                <div className="fixed inset-0 z-50 flex items-end justify-center pointer-events-none">
                     {/* Backdrop */}
                     <div
-                        className="absolute inset-0 bg-black/40 pointer-events-auto transition-opacity"
+                        className="absolute inset-0 bg-black/30 backdrop-blur-sm pointer-events-auto transition-opacity"
                         onClick={closeDetail}
                     />
 
                     {/* Modal Content */}
-                    <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-8 shadow-2xl transform transition-transform pointer-events-auto relative">
+                    <div className="bg-white w-full max-w-md rounded-t-2xl sm:rounded-3xl p-6 sm:p-8 shadow-2xl transform transition-transform pointer-events-auto relative">
                         <button
                             onClick={closeDetail}
                             className="absolute top-6 right-6 text-gray-400 hover:text-dark transition-colors bg-gray-50 rounded-full p-2"
@@ -306,41 +266,25 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             </div>
                         </div>
 
-                        {/* Recommendation Section — shimmer while GPT loads, final card when resolved */}
-                        {(upsellData || upsellLoading) && (
-                            <div className="border-t border-dashed border-gray-200 pt-6">
-                                <h3 className="text-sm font-bold text-dark/70 mb-4 font-body">
-                                    {upsellHeader}
-                                </h3>
-                                <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 animate-fade-in">
-                                    <div className="flex items-start justify-between mb-2">
-                                        {upsellLoading ? (
-                                            <div className="flex-1 space-y-2">
-                                                <div className="h-4 w-1/2 bg-gray-200 rounded animate-pulse" />
-                                                <div className="h-3 w-1/4 bg-gray-200 rounded animate-pulse" />
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <h4 className="font-heading font-bold text-dark text-lg">{upsellData?.item.name}</h4>
-                                                <span className="text-sm font-bold text-highlight">{upsellData?.item.price}</span>
-                                            </>
-                                        )}
+                        {/* 1-Line Recommendation Section */}
+                        {upsellData && (
+                            <div className="border-t border-dashed border-gray-200 mt-6 pt-6">
+                                <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 flex justify-between items-center shadow-sm">
+                                    <div className="flex-1 pr-2">
+                                        <span className="text-xs font-bold text-orange-600 mb-1 inline-block uppercase tracking-wide">
+                                            {upsellData.tag}
+                                        </span>
+                                        <h4 className="font-heading font-bold text-dark text-sm leading-tight">
+                                            {upsellData.item.name}
+                                        </h4>
+                                        <span className="text-sm font-bold text-highlight">{upsellData.item.price}</span>
                                     </div>
-                                    {upsellLoading ? (
-                                        <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse mb-4" />
-                                    ) : (
-                                        <p className="text-sm text-dark/80 italic mb-4 font-body leading-relaxed">
-                                            "{upsellData?.reason}"
-                                        </p>
-                                    )}
-                                    <Button
-                                        onClick={() => upsellData && handleAddBothToOrder(selectedItem, upsellData.item)}
-                                        disabled={upsellLoading}
-                                        variant="primary"
-                                        fullWidth
+                                    <button
+                                        onClick={() => handleAddBothToOrder(selectedItem, upsellData.item)}
+                                        className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-md transition-all active:scale-95 whitespace-nowrap"
                                     >
-                                        Add Both to Order
-                                    </Button>
+                                        Add
+                                    </button>
                                 </div>
                             </div>
                         )}
@@ -348,7 +292,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         <div className="mt-8 space-y-3">
                             <Button
                                 onClick={() => handleAddToOrder(selectedItem)}
-                                variant="secondary"
+                                variant="primary"
                                 fullWidth
                             >
                                 Add to Order
