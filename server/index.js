@@ -601,33 +601,104 @@ app.post("/api/rank-upsell", async (req, res) => {
             return res.status(400).json({ error: "No valid candidates" });
         }
 
-        // --- Complementary Category Filter ---
-        // Food (burger, wrap, breakfast, fries) -> recommend Beverages or Dessert
-        // Beverages (coffee, juice, smoothie) -> recommend Food or Dessert
-        // Dessert (brownie, muffin, ice cream) -> recommend Beverages only
-        const primaryCategory = primaryItem.category || "";
-        console.log(`[rank-upsell] Primary category: "${primaryCategory}"`);
+        // --- Scalable Keyword-Based Category Bucketing ---
+        // Works for ANY restaurant without code changes.
+        // New categories are auto-classified by keyword matching.
+        // Default bucket is FOOD (safest, since most menu items are food).
 
-        const COMPLEMENTARY_MAP = {
-            "Food": ["Beverages", "Dessert"],
-            "Beverages": ["Food", "Dessert"],
-            "Dessert": ["Beverages"]
+        function getCategoryBucket(category) {
+            if (!category) return "FOOD";
+            const c = category.toLowerCase().trim();
+
+            // DRINK: any category containing drink-related keywords
+            const DRINK_KEYWORDS = [
+                "beverage", "drink", "juice", "coffee", "tea", "chai",
+                "shake", "smoothie", "mocktail", "cocktail", "lassi",
+                "chaas", "buttermilk", "soda", "lemonade", "lemon",
+                "water", "beer", "wine", "spirits", "cooler", "squash",
+                "toddy", "kombucha", "milkshake", "frappe", "cold brew",
+                "hot drink", "cold drink", "nimbu", "jaljeera", "aam panna",
+                "sharbat", "thandai"
+            ];
+
+            // DESSERT: any category containing sweet/dessert-related keywords
+            const DESSERT_KEYWORDS = [
+                "dessert", "sweet", "ice cream", "icecream", "gelato",
+                "cake", "pastry", "mithai", "gulab jamun", "rasgulla",
+                "halwa", "kheer", "pudding", "brownie", "cookie",
+                "waffle", "pancake", "sundae", "kulfi", "falooda",
+                "payasam", "ladoo", "barfi", "jalebi", "rabri",
+                "mousse", "tiramisu", "cheesecake", "pie", "tart"
+            ];
+
+            for (const keyword of DRINK_KEYWORDS) {
+                if (c.includes(keyword)) return "DRINK";
+            }
+
+            for (const keyword of DESSERT_KEYWORDS) {
+                if (c.includes(keyword)) return "DESSERT";
+            }
+
+            // Everything else is FOOD (burger, pizza, pasta, rice, biryani,
+            // starters, mains, soup, salad, sides, appetizers, tandoor, etc.)
+            return "FOOD";
+        }
+
+        // Also classify by item tags as a second signal (if category is ambiguous)
+        function getCategoryBucketWithTags(category, tags) {
+            const bucketFromCategory = getCategoryBucket(category);
+
+            // If category gave us a clear DRINK or DESSERT, trust it
+            if (bucketFromCategory !== "FOOD") return bucketFromCategory;
+
+            // If category defaulted to FOOD, check tags for drink/dessert signals
+            if (tags && Array.isArray(tags) && tags.length > 0) {
+                const tagStr = tags.join(" ").toLowerCase();
+
+                const DRINK_TAG_SIGNALS = ["drink", "beverage", "coffee", "tea", "juice", "smoothie", "shake", "cold", "hot drink"];
+                const DESSERT_TAG_SIGNALS = ["dessert", "sweet", "frozen", "ice cream", "cake", "pastry", "chocolate"];
+
+                for (const signal of DRINK_TAG_SIGNALS) {
+                    if (tagStr.includes(signal)) return "DRINK";
+                }
+                for (const signal of DESSERT_TAG_SIGNALS) {
+                    if (tagStr.includes(signal)) return "DESSERT";
+                }
+            }
+
+            return "FOOD";
+        }
+
+        // --- Apply Complementary Filter ---
+        const primaryBucket = getCategoryBucketWithTags(
+            primaryItem.category,
+            primaryItem.tags
+        );
+        console.log(`[rank-upsell] Primary: "${primaryItem.name}" | category: "${primaryItem.category}" | bucket: "${primaryBucket}"`);
+
+        const BUCKET_COMPLEMENTS = {
+            "FOOD": ["DRINK", "DESSERT"],
+            "DRINK": ["FOOD", "DESSERT"],
+            "DESSERT": ["DRINK"]
         };
 
-        const allowedCategories = COMPLEMENTARY_MAP[primaryCategory];
+        const allowedBuckets = BUCKET_COMPLEMENTS[primaryBucket];
 
-        if (allowedCategories && allowedCategories.length > 0) {
-            const complementaryPool = candidatePool.filter(
-                item => allowedCategories.includes(item.category)
-            );
+        if (allowedBuckets && allowedBuckets.length > 0) {
+            const complementaryPool = candidatePool.filter(item => {
+                const itemBucket = getCategoryBucketWithTags(item.category, item.tags);
+                return allowedBuckets.includes(itemBucket);
+            });
             console.log(`[rank-upsell] Complementary filter: ${candidatePool.length} -> ${complementaryPool.length} candidates`);
+            console.log(`[rank-upsell] Filtered candidates: ${JSON.stringify(complementaryPool.map(c => ({ name: c.name, category: c.category, bucket: getCategoryBucketWithTags(c.category, c.tags) })))}`);
+
             if (complementaryPool.length > 0) {
                 candidatePool = complementaryPool;
             } else {
-                console.warn("[rank-upsell] No complementary candidates found, keeping full pool as fallback");
+                console.warn("[rank-upsell] No complementary candidates found, keeping full pool");
             }
         } else {
-            console.warn(`[rank-upsell] No complementary mapping for category "${primaryCategory}", keeping full pool`);
+            console.warn(`[rank-upsell] No bucket match for "${primaryBucket}", keeping full pool`);
         }
 
         // Shuffle the entire pool before slicing
