@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
 import type { Item } from "../utils/recommendations";
 import { useApp } from "../contexts/AppContext";
+import { Button } from "../components/Button";
 
 const UPSELL_TAGS = [
     "🔥 Popular",
@@ -54,6 +55,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
+    const [showAddedToast, setShowAddedToast] = useState(false);
 
     const hasTrackedCurrentModal = useRef(false);
 
@@ -126,7 +128,9 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         for (let i = 0; i < quantity; i++) {
             dispatch({ type: "ADD_TO_CART", payload: item });
         }
-
+        setShowAddedToast(true);
+        setTimeout(() => setShowAddedToast(false), 1500);
+        closeDetail();
     };
 
     const handleAddBothToOrder = (mainItem: Item, recItem: Item) => {
@@ -142,6 +146,8 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             dispatch({ type: "ADD_TO_CART", payload: mainItem });
             dispatch({ type: "ADD_TO_CART", payload: recItem });
         }
+        setShowAddedToast(true);
+        setTimeout(() => setShowAddedToast(false), 1500);
         closeDetail();
     };
 
@@ -174,8 +180,8 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
                 {/* Added Toast */}
                 {showAddedToast && (
-                    <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-full shadow-lg z-50 font-medium animate-scale-in">
-                        ✓ Added to order!
+                    <div className="fixed bottom-10 left-1/2 transform -translate-x-1/2 text-sm bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50">
+                        Added to order
                     </div>
                 )}
 
