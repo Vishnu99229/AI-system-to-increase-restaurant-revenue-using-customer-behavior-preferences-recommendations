@@ -42,3 +42,11 @@ Orlena: Avoids cheese-based suggestions automatically
 
 ## Status
 Actively building and testing real-world use cases
+
+ai
+llm
+recommendation-system
+personalization
+restaurant-tech
+machine-learning
+customer-behavior
