@@ -16,6 +16,9 @@ export default function QRPrintPage() {
     // Extract restaurantId from pathname: /qr/:restaurantId
     const restaurantId = window.location.pathname.replace(/^\/qr\//, "").replace(/\/$/, "");
 
+    // Allow ?tables=N query param to override table count
+    const tablesOverride = new URLSearchParams(window.location.search).get("tables");
+
     useEffect(() => {
         if (!restaurantId) {
             setError("No restaurant specified.");
@@ -27,12 +30,20 @@ export default function QRPrintPage() {
                 if (!res.ok) throw new Error("Restaurant not found");
                 return res.json();
             })
-            .then(async (data: RestaurantConfig) => {
-                setConfig(data);
+            .then(async (data: any) => {
+                // Backend returns snake_case max_tables; query param overrides; default 20
+                const tableCount = tablesOverride
+                    ? parseInt(tablesOverride, 10)
+                    : (data.max_tables || data.maxTables || 20);
+                const resolvedConfig: RestaurantConfig = {
+                    name: data.name,
+                    maxTables: tableCount,
+                };
+                setConfig(resolvedConfig);
 
                 // Generate QR codes for all tables
                 const codes: string[] = [];
-                for (let t = 1; t <= data.maxTables; t++) {
+                for (let t = 1; t <= resolvedConfig.maxTables; t++) {
                     const url = `${window.location.origin}/?restaurant=${restaurantId}&table=${t}`;
                     const dataUrl = await QRCode.toDataURL(url, {
                         width: 200,

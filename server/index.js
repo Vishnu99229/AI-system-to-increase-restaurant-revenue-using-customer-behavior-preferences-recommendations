@@ -437,9 +437,15 @@ app.post("/api/customer-login", async (req, res) => {
 
 // --- Standard Client Routes ---
 app.get("/api/restaurant/:id", async (req, res) => {
-    const result = await pool.query("SELECT name, max_tables FROM restaurants WHERE domain = $1", [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
-    res.json(result.rows[0]);
+    try {
+        const result = await pool.query("SELECT name FROM restaurants WHERE domain = $1", [req.params.id]);
+        if (result.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
+        // max_tables column may not exist in production; default to 20
+        res.json({ name: result.rows[0].name, max_tables: 20 });
+    } catch (err) {
+        console.error("[restaurant/:id] Error:", err.message);
+        res.status(500).json({ error: "Failed to fetch restaurant" });
+    }
 });
 
 app.get("/api/:slug/menu", async (req, res) => {
