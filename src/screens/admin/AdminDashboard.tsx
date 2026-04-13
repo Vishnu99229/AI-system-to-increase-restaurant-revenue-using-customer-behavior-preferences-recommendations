@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fetchAdminAnalytics, fetchAdminOrders, fetchMenu, addMenuItem, updateMenuItem, deleteMenuItem } from "../../utils/api";
+import { fetchAdminAnalytics, fetchAdminOrders, updateOrderStatus, fetchMenu, addMenuItem, updateMenuItem, deleteMenuItem } from "../../utils/api";
 
 interface AdminDashboardProps {
     slug: string;
@@ -91,36 +91,74 @@ interface TableGroup {
     items: { name: string; qty: number }[];
     total: number;
     earliestOrder: string;
+    orderIds: number[];
+}
+
+interface ActiveAlert {
+    level: "strong" | "medium";
+    tableNumber?: string;
+    unseenUpdates?: number;
+}
+
+// --- Audio helper ---
+function playBeep(frequency: number, durationMs: number, gain: number): void {
+    try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+        gainNode.gain.setValueAtTime(gain, ctx.currentTime);
+
+        osc.start();
+        osc.stop(ctx.currentTime + durationMs / 1000);
+    } catch (err) {
+        console.error("Audio beep failed:", err);
+    }
 }
 
 function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     const [activeTables, setActiveTables] = useState<TableGroup[]>([]);
-    const intervalRef = useRef<number | undefined>(undefined);
+    const [activeAlert, setActiveAlert] = useState<ActiveAlert | null>(null);
 
+    const intervalRef = useRef<number | undefined>(undefined);
+    const prevTableIdsRef = useRef<Set<string> | null>(null);
+    const prevItemCountsRef = useRef<Map<string, number> | null>(null);
+    const repeatIntervalRef = useRef<number | undefined>(undefined);
+    const titleIntervalRef = useRef<number | undefined>(undefined);
+    const repeatCountRef = useRef<number>(0);
+    const activeTablesPanelRef = useRef<HTMLDivElement>(null);
+
+    // --- Build active tables from raw orders ---
     const buildActiveTables = (orders: any[]): TableGroup[] => {
         const activeOrders = orders.filter(
             (o: any) => o.status === "pending" || o.status === "preparing"
         );
 
-        const grouped: Record<string, { items: Record<string, number>; total: number; earliest: string }> = {};
+        const grouped: Record<string, { items: Record<string, number>; total: number; earliest: string; orderIds: number[] }> = {};
 
         for (const order of activeOrders) {
             const tn = order.table_number;
             if (!tn) continue;
 
             if (!grouped[tn]) {
-                grouped[tn] = { items: {}, total: 0, earliest: order.created_at };
+                grouped[tn] = { items: {}, total: 0, earliest: order.created_at, orderIds: [] };
             }
 
             const group = grouped[tn];
             group.total += Math.round(Number(order.total) || 0);
+            group.orderIds.push(order.id);
 
-            // Track earliest order timestamp
             if (order.created_at && order.created_at < group.earliest) {
                 group.earliest = order.created_at;
             }
 
-            // Parse and consolidate items
             try {
                 const parsed = JSON.parse(order.items || "[]");
                 for (const item of parsed) {
@@ -138,29 +176,158 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                 items: Object.entries(g.items).map(([name, qty]) => ({ name, qty })),
                 total: g.total,
                 earliestOrder: g.earliest,
+                orderIds: g.orderIds,
             }))
             .sort((a, b) => a.tableNumber.localeCompare(b.tableNumber, undefined, { numeric: true }));
     };
 
+    // --- Dismiss all alerts ---
+    const dismissAlert = () => {
+        if (repeatIntervalRef.current) {
+            window.clearInterval(repeatIntervalRef.current);
+            repeatIntervalRef.current = undefined;
+        }
+        if (titleIntervalRef.current) {
+            window.clearInterval(titleIntervalRef.current);
+            titleIntervalRef.current = undefined;
+        }
+        repeatCountRef.current = 0;
+        document.title = "Admin Panel";
+        setActiveAlert(null);
+    };
+
+    // --- Fire STRONG alert ---
+    const fireStrongAlert = (tableNumber: string) => {
+        // Clear any existing alert first
+        dismissAlert();
+
+        setActiveAlert({ level: "strong", tableNumber });
+
+        // Immediate beep
+        playBeep(1000, 300, 0.3);
+        repeatCountRef.current = 1;
+
+        // Repeat beep every 5s, max 6 repeats
+        repeatIntervalRef.current = window.setInterval(() => {
+            repeatCountRef.current += 1;
+            if (repeatCountRef.current >= 6) {
+                if (repeatIntervalRef.current) window.clearInterval(repeatIntervalRef.current);
+                repeatIntervalRef.current = undefined;
+                return;
+            }
+            playBeep(1000, 300, 0.3);
+        }, 5000);
+
+        // Flash title every 1s
+        let showNew = true;
+        titleIntervalRef.current = window.setInterval(() => {
+            document.title = showNew ? "(NEW) Admin Panel" : "Admin Panel";
+            showNew = !showNew;
+        }, 1000);
+    };
+
+    // --- Fire MEDIUM alert ---
+    const fireMediumAlert = (unseenUpdates: number) => {
+        // Single beep
+        playBeep(800, 200, 0.2);
+
+        setActiveAlert((prev) => ({
+            level: "medium",
+            unseenUpdates: (prev?.unseenUpdates || 0) + unseenUpdates,
+        }));
+
+        document.title = `(${unseenUpdates} update) Admin Panel`;
+    };
+
+    // --- Close table ---
+    const handleCloseTable = async (table: TableGroup) => {
+        const ok = confirm(`Close Table ${table.tableNumber}? This will mark all active orders as completed.`);
+        if (!ok) return;
+
+        for (const orderId of table.orderIds) {
+            const success = await updateOrderStatus(slug, orderId, "completed");
+            if (!success) {
+                alert(`Failed to update order on Table ${table.tableNumber}. Please try again.`);
+                return;
+            }
+        }
+
+        // Trigger immediate refetch
+        fetchActiveTables();
+    };
+
+    // --- Fetch and process active tables ---
     const fetchActiveTables = async () => {
         try {
             const orders = await fetchAdminOrders(slug);
-            setActiveTables(buildActiveTables(orders));
+            const tables = buildActiveTables(orders);
+            setActiveTables(tables);
+
+            // Build current snapshots
+            const currentTableIds = new Set(tables.map((t) => t.tableNumber));
+            const currentItemCounts = new Map(
+                tables.map((t) => [t.tableNumber, t.items.reduce((sum, i) => sum + i.qty, 0)])
+            );
+
+            // First poll: initialize refs, no alerts
+            if (prevTableIdsRef.current === null || prevItemCountsRef.current === null) {
+                prevTableIdsRef.current = currentTableIds;
+                prevItemCountsRef.current = currentItemCounts;
+                return;
+            }
+
+            // Detect new tables
+            let newTableNumber: string | null = null;
+            for (const tn of currentTableIds) {
+                if (!prevTableIdsRef.current.has(tn)) {
+                    newTableNumber = tn;
+                    break;
+                }
+            }
+
+            if (newTableNumber) {
+                fireStrongAlert(newTableNumber);
+            } else {
+                // Detect new items on existing tables
+                let totalNewItems = 0;
+                for (const [tn, count] of currentItemCounts) {
+                    const prevCount = prevItemCountsRef.current.get(tn) || 0;
+                    if (count > prevCount) {
+                        totalNewItems += count - prevCount;
+                    }
+                }
+                if (totalNewItems > 0) {
+                    fireMediumAlert(totalNewItems);
+                }
+            }
+
+            // Update refs
+            prevTableIdsRef.current = currentTableIds;
+            prevItemCountsRef.current = currentItemCounts;
         } catch (err) {
             console.error("Failed to fetch active tables", err);
         }
     };
 
+    // --- Polling effect ---
     useEffect(() => {
         fetchActiveTables();
-
         intervalRef.current = window.setInterval(fetchActiveTables, 10000);
 
         return () => {
             if (intervalRef.current) window.clearInterval(intervalRef.current);
+            dismissAlert();
         };
     }, [slug]);
 
+    // --- Dismiss on window focus ---
+    useEffect(() => {
+        const handler = () => dismissAlert();
+        window.addEventListener("focus", handler);
+        return () => window.removeEventListener("focus", handler);
+    }, []);
+
+    // --- Time helper ---
     const getTimeAgo = (timestamp?: string) => {
         if (!timestamp) return "Just now";
         const mins = Math.floor((new Date().getTime() - new Date(timestamp).getTime()) / 60000);
@@ -181,6 +348,24 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 
     return (
         <div className="space-y-8">
+            {/* Notification Banner (STRONG alert only) */}
+            {activeAlert?.level === "strong" && (
+                <div
+                    className="bg-[#E24B4A] text-white font-bold py-3 px-6 rounded-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 transition-all duration-300 animate-[fadeSlideIn_0.3s_ease-out]"
+                    style={{ position: "sticky", top: 0, zIndex: 40 }}
+                >
+                    <span className="text-sm sm:text-base">
+                        🔔 New table ordering: Table {activeAlert.tableNumber}
+                    </span>
+                    <button
+                        onClick={dismissAlert}
+                        className="text-sm font-bold text-white border border-white/50 rounded px-3 py-1 hover:bg-white/10 transition-colors self-end sm:self-auto"
+                    >
+                        Dismiss
+                    </button>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 {cards.map((card, i) => (
                     <div key={i} className={`p-6 rounded-2xl border border-gray-100 shadow-sm ${card.color}`}>
@@ -246,7 +431,11 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             </div>
 
             {/* Active Tables Section */}
-            <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-sm">
+            <div
+                ref={activeTablesPanelRef}
+                className="bg-white p-8 rounded-2xl border border-gray-100 shadow-sm"
+                onClick={() => { if (activeAlert) dismissAlert(); }}
+            >
                 <div className="mb-6">
                     <h3 className="text-lg font-bold text-gray-800">Active Tables</h3>
                     <p className="text-sm text-gray-500 mt-1">Live view of tables currently ordering</p>
@@ -282,6 +471,14 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                                     <span className="font-bold text-[#1D9E75]">₹{Math.round(table.total)}</span>
                                     <span className="text-xs text-gray-400 font-medium">Started {getTimeAgo(table.earliestOrder)}</span>
                                 </div>
+
+                                {/* Close Table Button */}
+                                <button
+                                    onClick={() => handleCloseTable(table)}
+                                    className="w-full bg-[#1D9E75] text-white hover:bg-[#15805E] font-bold py-2 rounded-lg text-sm mt-2 transition-colors"
+                                >
+                                    Close Table
+                                </button>
                             </div>
                         ))}
                     </div>
