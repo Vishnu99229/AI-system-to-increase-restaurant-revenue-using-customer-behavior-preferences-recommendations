@@ -207,7 +207,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
             total,
             upsellAccepted,
             upsellValue,
-            cartItems.map(item => ({ name: item.name, price: item.price })),
+            cartItems.map(item => ({ name: item.name, price: item.price, is_upsell: item.is_upsell || false })),
             state.tableNumber,
             state.customerName,
             phone
@@ -244,7 +244,7 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const handleAddUpsell = () => {
         if (!upsellData) return;
         trackUpsellEvent(buildUpsellEventPayload("accepted"));
-        dispatch({ type: "ADD_TO_CART", payload: upsellData.item });
+        dispatch({ type: "ADD_TO_CART", payload: { ...upsellData.item, is_upsell: true } });
         dispatch({ type: "INCREMENT_UPSELL_METRIC", payload: "checkoutUpsellAcceptedCount" });
         setUpsellAccepted(true);
         setUpsellValue(parsePrice(upsellData.item.price));

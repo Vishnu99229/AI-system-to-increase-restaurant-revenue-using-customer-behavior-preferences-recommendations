@@ -11,6 +11,7 @@ export interface Item {
     tags?: string[];
     image_url?: string;
     pairsWith?: string[]; // Legacy, kept for compatibility
+    is_upsell?: boolean; // Set to true when item was added via upsell recommendation
 }
 
 export interface Recommendation {

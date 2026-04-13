@@ -53,6 +53,7 @@ const pool = new Pool({
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending'`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS table_number VARCHAR(20)`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS upsell_value INTEGER DEFAULT 0`);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS admins (
@@ -280,12 +281,20 @@ app.get("/api/admin/:slug/analytics", authenticateAdmin, async (req, res) => {
         const totalRevenue = parseFloat(stats.total_revenue);
         const totalOrders = parseInt(stats.total_orders);
 
+        // Ground-truth upsell revenue from orders table (upsell_value stored at order time)
+        const confirmedResult = await pool.query(
+            "SELECT COALESCE(SUM(upsell_value), 0) as confirmed_revenue FROM orders WHERE restaurant_id = $1 AND pairing_accepted = true AND upsell_value > 0",
+            [restaurant_id]
+        );
+        const confirmedUpsellRevenue = parseFloat(confirmedResult.rows[0].confirmed_revenue);
+
         res.json({
             totalRevenue,
             totalOrders,
             aov: totalOrders > 0 ? totalRevenue / totalOrders : 0,
             upsellConversionRate: shownCount > 0 ? (acceptedCount / shownCount) * 100 : 0,
             upsellRevenue,
+            confirmedUpsellRevenue,
             revenueIncreasePercent: totalRevenue > 0 ? (upsellRevenue / (totalRevenue - upsellRevenue)) * 100 : 0,
             topUpsellItems: topUpsells.rows,
         });
@@ -514,8 +523,8 @@ app.post("/api/:slug/order-complete", async (req, res) => {
 
         const { items, total, customer_name, customer_phone, upsellAccepted, upsellValue, tableNumber } = req.body;
         const result = await pool.query(
-            "INSERT INTO orders (restaurant_id, items, total, customer_name, customer_phone, pairing_accepted, table_number) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-            [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted, tableNumber || null]
+            "INSERT INTO orders (restaurant_id, items, total, customer_name, customer_phone, pairing_accepted, table_number, upsell_value) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+            [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted, tableNumber || null, Math.round(Number(upsellValue) || 0)]
         );
 
         res.json({ success: true, orderId: result.rows[0].id });

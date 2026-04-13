@@ -293,7 +293,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
         for (let i = 0; i < quantity; i++) {
             dispatch({ type: "ADD_TO_CART", payload: mainItem });
-            dispatch({ type: "ADD_TO_CART", payload: recItem });
+            dispatch({ type: "ADD_TO_CART", payload: { ...recItem, is_upsell: true } });
         }
         setShowAddedToast(true);
         setTimeout(() => setShowAddedToast(false), 1500);
