@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
 import { rankCandidatesAI } from "../utils/recommendations";
 import type { Item } from "../utils/recommendations";
@@ -8,6 +8,27 @@ import { useApp } from "../contexts/AppContext";
 interface MenuProps {
     onBack: () => void;
     onViewCart: () => void;
+}
+
+// --- Tab-to-Category Mapping ---
+const TAB_GROUPS: Record<string, string[]> = {
+    "Drinks": ["Coffee", "Tea", "Hot Chocolate", "Brewmaster's Picks", "Fresh Juices"],
+    "Breakfast": ["All Day Breakfast", "Eggs", "Pancakes Waffles Crepes", "Savoury Waffles"],
+    "Mains": ["Sandwiches", "Cafe Classics", "Pastas", "Signature Salads"],
+    "Snacks": ["Quick Bites", "Bakery", "Ice Creams"],
+    "Healthy": ["Healthy Options"],
+};
+
+const TAB_NAMES = Object.keys(TAB_GROUPS);
+const DEFAULT_TAB = "Drinks";
+
+// --- Diet-dot color by tags ---
+function getDietDot(tags?: string[]): { color: string; label: string } | null {
+    if (!tags || tags.length === 0) return null;
+    if (tags.includes("non-veg")) return { color: "#E24B4A", label: "Non-veg" };
+    if (tags.includes("egg")) return { color: "#F4B400", label: "Contains egg" };
+    if (tags.includes("veg")) return { color: "#1D9E75", label: "Veg" };
+    return null;
 }
 
 function MenuItemImage({ src, alt, className = "" }: { src?: string; alt: string; className?: string }) {
@@ -55,6 +76,17 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const hasTrackedCurrentModal = useRef(false);
 
     const [upsellData, setUpsellData] = useState<{ item: Item; tag: string } | null>(null);
+
+    // --- Navigation / Filter State ---
+    const [activeTab, setActiveTab] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get("tab") || DEFAULT_TAB;
+    });
+    const [searchQuery, setSearchQuery] = useState("");
+    const [vegOnly, setVegOnly] = useState(false);
+
+    const tabScrollRef = useRef<HTMLDivElement>(null);
+    const categoryRefs = useRef<Record<string, HTMLElement | null>>({});
 
     useEffect(() => {
         if (!items || items.length === 0) return;
@@ -119,6 +151,78 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             });
         }
     }, [selectedItem, upsellData]);
+
+    // --- Browsable items: exclude add-ons ---
+    const browseItems = useMemo(() => {
+        return items.filter(i => !i.tags?.includes("addon"));
+    }, [items]);
+
+    // --- Filtered items based on active tab, search, veg toggle ---
+    const { filteredGroups, resultCount, isSearching } = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase();
+        const isSearching = query.length > 0;
+
+        let pool = browseItems;
+
+        // Veg-only filter: include only items with 'veg' tag (exclude egg, non-veg)
+        if (vegOnly) {
+            pool = pool.filter(i => {
+                const tags = i.tags || [];
+                return tags.includes("veg") && !tags.includes("egg") && !tags.includes("non-veg");
+            });
+        }
+
+        if (isSearching) {
+            // Search across name, description, category (ignore active tab)
+            pool = pool.filter(i => {
+                const haystack = `${i.name} ${i.description || ""} ${i.category}`.toLowerCase();
+                return haystack.includes(query);
+            });
+        } else {
+            // Filter by active tab's categories
+            const tabCategories = TAB_GROUPS[activeTab];
+            if (tabCategories) {
+                pool = pool.filter(i => tabCategories.includes(i.category));
+            }
+        }
+
+        // Group by category preserving insertion order
+        const groups: { category: string; items: Item[] }[] = [];
+        const seen = new Set<string>();
+        for (const item of pool) {
+            if (!seen.has(item.category)) {
+                seen.add(item.category);
+                groups.push({ category: item.category, items: [] });
+            }
+            groups.find(g => g.category === item.category)!.items.push(item);
+        }
+
+        return { filteredGroups: groups, resultCount: pool.length, isSearching };
+    }, [browseItems, activeTab, searchQuery, vegOnly]);
+
+    // --- Tab click handler ---
+    const handleTabClick = (tab: string) => {
+        setActiveTab(tab);
+        setSearchQuery("");
+
+        // Update URL param
+        const params = new URLSearchParams(window.location.search);
+        params.set("tab", tab);
+        window.history.replaceState({}, "", `?${params.toString()}`);
+
+        // Scroll to top of content
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    // --- Scroll active tab pill into view ---
+    useEffect(() => {
+        if (tabScrollRef.current) {
+            const activeBtn = tabScrollRef.current.querySelector('[data-active="true"]');
+            if (activeBtn) {
+                activeBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+            }
+        }
+    }, [activeTab]);
 
     const handleItemClick = (item: Item) => {
         setSelectedItem(item);
@@ -235,51 +339,191 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                     </div>
                 )}
 
-                <div className="px-6 pt-8 pb-2">
-                    <button onClick={onBack} className="text-highlight mb-4 font-medium">← Back</button>
-                    <h1 className="text-4xl font-bold mb-1 text-dark">Menu</h1>
+                {/* ===== STICKY HEADER ===== */}
+                <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md shadow-sm">
+                    {/* Top row: back + restaurant name */}
+                    <div className="flex items-center gap-3 px-4 pt-3 pb-1">
+                        <button
+                            onClick={onBack}
+                            className="text-gray-500 hover:text-dark transition-colors shrink-0"
+                            aria-label="Go back"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                            </svg>
+                        </button>
+                        <span className="text-sm font-medium text-gray-600 truncate font-body">
+                            {state.restaurantId ? state.restaurantId.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "Menu"}
+                        </span>
+                        {state.tableNumber && (
+                            <span className="text-xs text-gray-400 ml-auto shrink-0 font-body">
+                                Table {state.tableNumber}
+                            </span>
+                        )}
+                    </div>
+
+                    {/* Search bar */}
+                    <div className="px-4 py-2">
+                        <div className="relative">
+                            <svg
+                                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search items"
+                                aria-label="Search menu items"
+                                className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-gray-100 text-sm text-dark placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/30 focus:bg-white transition-all font-body border border-transparent focus:border-[#FF6B35]/20"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery("")}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                    aria-label="Clear search"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Tab pills row */}
+                    <div
+                        ref={tabScrollRef}
+                        className="flex gap-2 px-4 pb-3 overflow-x-auto no-scrollbar"
+                        role="tablist"
+                        aria-label="Menu categories"
+                    >
+                        {/* Veg Only toggle */}
+                        <button
+                            onClick={() => setVegOnly(!vegOnly)}
+                            className={`shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+                                vegOnly
+                                    ? "bg-[#1D9E75] text-white border-[#1D9E75] shadow-sm"
+                                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+                            }`}
+                            aria-pressed={vegOnly}
+                            aria-label={vegOnly ? "Show all items" : "Show veg only"}
+                        >
+                            <span
+                                className={`inline-block w-2.5 h-2.5 rounded-full ${
+                                    vegOnly ? "bg-white" : "bg-[#1D9E75]"
+                                }`}
+                            />
+                            Veg
+                        </button>
+
+                        {/* Category tabs */}
+                        {TAB_NAMES.map(tab => (
+                            <button
+                                key={tab}
+                                role="tab"
+                                aria-selected={activeTab === tab && !isSearching}
+                                data-active={activeTab === tab && !isSearching}
+                                onClick={() => handleTabClick(tab)}
+                                className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+                                    activeTab === tab && !isSearching
+                                        ? "bg-[#FF6B35] text-white border-[#FF6B35] shadow-sm"
+                                        : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+                                }`}
+                            >
+                                {tab}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                <div className="px-6 py-4 space-y-10">
-                    {items.length === 0 ? (
-                        <div className="text-center py-12">
-                            <p className="text-highlight text-lg font-medium">No menu items available yet.</p>
+                {/* Search result count */}
+                {isSearching && (
+                    <div className="px-5 pt-3 pb-1">
+                        <p className="text-xs text-gray-400 font-body">
+                            {resultCount} {resultCount === 1 ? "result" : "results"}
+                        </p>
+                    </div>
+                )}
+
+                {/* ===== MENU CONTENT ===== */}
+                <div className="px-4 py-4 space-y-8">
+                    {filteredGroups.length === 0 ? (
+                        <div className="text-center py-16">
+                            {isSearching ? (
+                                <div>
+                                    <p className="text-gray-400 text-base font-body mb-1">
+                                        No items match "{searchQuery}".
+                                    </p>
+                                    <p className="text-gray-300 text-sm font-body">
+                                        Try a different search
+                                    </p>
+                                </div>
+                            ) : (
+                                <div>
+                                    <p className="text-gray-400 text-base font-body mb-1">
+                                        Nothing here yet.
+                                    </p>
+                                    <p className="text-gray-300 text-sm font-body">
+                                        Try another tab
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     ) : (
-                        /* Group items by category, preserving insertion order */
-                        Array.from(new Set(items.map(i => i.category))).map(category => (
-                            <section key={category}>
-                                <h2 className="text-xl font-heading font-bold text-dark border-b-2 border-primary/20 pb-2 mb-6 inline-block">
-                                    {category}
+                        filteredGroups.map(group => (
+                            <section
+                                key={group.category}
+                                ref={(el) => { categoryRefs.current[group.category] = el; }}
+                            >
+                                <h2 className="text-base font-semibold text-gray-700 mb-3 font-body tracking-wide">
+                                    {group.category}
                                 </h2>
-                                <div className="space-y-4">
-                                    {items.filter(item => item.category === category).map((item) => (
-                                        <div
-                                            key={item.id}
-                                            onClick={() => handleItemClick(item)}
-                                            className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl shadow-soft border border-transparent hover:border-primary/20 hover:shadow-soft-lg flex items-center justify-between cursor-pointer active:scale-[0.98] hover:scale-[1.01] transition-all duration-300"
-                                        >
-                                            <div className="flex-1 pr-4">
-                                                {item.popular && (
-                                                    <span className="inline-block bg-primary/20 text-dark text-xs font-bold px-2 py-1 rounded-md mb-2 uppercase tracking-wide">
-                                                        Popular
-                                                    </span>
+                                <div className="space-y-3">
+                                    {group.items.map((item) => {
+                                        const dietDot = getDietDot(item.tags);
+                                        return (
+                                            <div
+                                                key={item.id}
+                                                onClick={() => handleItemClick(item)}
+                                                className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl shadow-soft border border-transparent hover:border-primary/20 hover:shadow-soft-lg flex items-center justify-between cursor-pointer active:scale-[0.98] hover:scale-[1.01] transition-all duration-300 relative"
+                                            >
+                                                {/* Diet dot indicator */}
+                                                {dietDot && (
+                                                    <span
+                                                        className="absolute top-3 right-3 w-3 h-3 rounded-sm z-10"
+                                                        style={{ backgroundColor: dietDot.color }}
+                                                        title={dietDot.label}
+                                                        aria-label={dietDot.label}
+                                                    />
                                                 )}
-                                                <h3 className="font-heading font-bold text-lg text-dark leading-tight">{item.name}</h3>
-                                                {item.description && (
-                                                    <p className="text-gray-500 font-body text-sm mt-1 mb-2 leading-relaxed line-clamp-2">
-                                                        {item.description}
-                                                    </p>
-                                                )}
-                                                <p className="text-highlight font-medium mt-1 font-body">{item.price}</p>
+
+                                                <div className="flex-1 pr-4">
+                                                    {item.popular && (
+                                                        <span className="inline-block bg-primary/20 text-dark text-xs font-bold px-2 py-1 rounded-md mb-2 uppercase tracking-wide">
+                                                            Popular
+                                                        </span>
+                                                    )}
+                                                    <h3 className="font-heading font-bold text-lg text-dark leading-tight">{item.name}</h3>
+                                                    {item.description && (
+                                                        <p className="text-gray-500 font-body text-sm mt-1 mb-2 leading-relaxed line-clamp-2">
+                                                            {item.description}
+                                                        </p>
+                                                    )}
+                                                    <p className="text-highlight font-medium mt-1 font-body">₹{Math.round(getPriceValue(item.price))}</p>
+                                                </div>
+                                                <MenuItemImage
+                                                    src={item.image_url}
+                                                    alt={item.name}
+                                                    className="w-20 h-20 rounded-xl shrink-0 shadow-sm"
+                                                />
                                             </div>
-                                            <MenuItemImage
-                                                src={item.image_url}
-                                                alt={item.name}
-                                                className="w-20 h-20 rounded-xl shrink-0 shadow-sm"
-                                            />
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </section>
                         ))

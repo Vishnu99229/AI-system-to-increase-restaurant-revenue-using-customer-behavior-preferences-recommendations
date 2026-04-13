@@ -17,6 +17,8 @@ export async function fetchMenu(slug: string): Promise<Item[]> {
             price: `₹${parseFloat(String(row.price)).toFixed(0)}`,
             popular: false,
             category: row.category || "Other",
+            sub_category: row.sub_category || "",
+            tags: Array.isArray(row.tags) ? row.tags : [],
             image_url: row.image_url
         }));
     } catch (error) {

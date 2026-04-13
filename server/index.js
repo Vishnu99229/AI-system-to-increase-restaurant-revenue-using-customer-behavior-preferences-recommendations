@@ -453,7 +453,7 @@ app.get("/api/:slug/menu", async (req, res) => {
         const resResult = await pool.query("SELECT id FROM restaurants WHERE domain = $1", [req.params.slug]);
         if (resResult.rows.length === 0) return res.status(404).json({ error: "Restaurant not found" });
         const menuResult = await pool.query(
-            "SELECT id, name, description, price, category, image_url FROM menus WHERE restaurant_id = $1 AND is_available = true ORDER BY category, name",
+            "SELECT id, name, description, price, category, sub_category, tags, image_url FROM menus WHERE restaurant_id = $1 AND is_available = true ORDER BY category, name",
             [resResult.rows[0].id]
         );
         res.json(menuResult.rows);
