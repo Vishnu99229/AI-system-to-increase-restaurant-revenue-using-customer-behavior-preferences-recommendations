@@ -13,6 +13,88 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
+    const prevOrdersLengthRef = useRef<number>(0);
+    const hasInitialLoadedRef = useRef<boolean>(false);
+    const unseenCountRef = useRef<number>(0);
+
+    const playBeep = () => {
+        try {
+            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+            if (!AudioContext) return;
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(800, ctx.currentTime);
+            
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            
+            osc.start();
+            osc.stop(ctx.currentTime + 0.25);
+        } catch (err) {
+            console.error("Audio beep failed:", err);
+        }
+    };
+
+    const clearUnseen = () => {
+        if (activeTab === "orders") {
+            unseenCountRef.current = 0;
+            document.title = "Admin Panel";
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === "orders") {
+            clearUnseen();
+        }
+        hasInitialLoadedRef.current = false;
+        prevOrdersLengthRef.current = 0;
+    }, [activeTab]);
+
+    useEffect(() => {
+        const handler = () => clearUnseen();
+        window.addEventListener("focus", handler);
+        window.addEventListener("click", handler);
+        return () => {
+            window.removeEventListener("focus", handler);
+            window.removeEventListener("click", handler);
+        };
+    }, [activeTab]);
+
+    useEffect(() => {
+        let interval: number | undefined;
+
+        if (activeTab === "orders") {
+            interval = window.setInterval(async () => {
+                try {
+                    const data = await fetchAdminOrders(slug);
+                    
+                    if (hasInitialLoadedRef.current) {
+                        if (data.length > prevOrdersLengthRef.current) {
+                            const newCount = data.length - prevOrdersLengthRef.current;
+                            unseenCountRef.current += newCount;
+                            document.title = `(${unseenCountRef.current} new) Admin Panel`;
+                            playBeep();
+                        }
+                    } else {
+                        hasInitialLoadedRef.current = true;
+                    }
+                    
+                    prevOrdersLengthRef.current = data.length;
+                    setOrders(data);
+                } catch (e) {}
+            }, 10000);
+        }
+
+        return () => {
+            if (interval) window.clearInterval(interval);
+        };
+    }, [activeTab, slug]);
+
     const loadData = async () => {
         setLoading(true);
         try {
@@ -171,74 +253,175 @@ function AnalyticsView({ data }: { data: any }) {
 }
 
 function OrdersView({ orders, onStatusUpdate, slug }: { orders: any[]; onStatusUpdate: () => void; slug: string }) {
+    const [showCancelled, setShowCancelled] = useState(false);
+
     const handleUpdateStatus = async (id: number, status: string) => {
         const success = await updateOrderStatus(slug, id, status);
         if (success) onStatusUpdate();
     };
 
-    return (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-100 text-gray-500 text-xs font-bold uppercase tracking-wider">
-                    <tr>
-                        <th className="px-6 py-4">Order ID</th>
-                        <th className="px-6 py-4">Customer</th>
-                        <th className="px-6 py-4">Items</th>
-                        <th className="px-6 py-4">Total</th>
-                        <th className="px-6 py-4">Status</th>
-                        <th className="px-6 py-4">Action</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                    {orders.map((order) => (
-                        <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-6 py-4 font-bold text-gray-800">#{order.id}</td>
-                            <td className="px-6 py-4">
-                                <p className="font-bold text-gray-800">{order.customer_name}</p>
-                                <p className="text-xs text-gray-500">{order.customer_phone}</p>
-                            </td>
-                            <td className="px-6 py-4 max-w-xs truncate">
-                                {JSON.parse(order.items).map((i: any) => i.name).join(", ")}
-                            </td>
-                            <td className="px-6 py-4 font-bold text-green-600">₹{order.total}</td>
-                            <td className="px-6 py-4">
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${
-                                    order.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                    order.status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                                    'bg-orange-100 text-orange-700'
-                                }`}>
-                                    {order.status}
-                                </span>
-                            </td>
-                            <td className="px-6 py-4">
-                                <div className="flex gap-2">
-                                    {order.status === 'pending' && (
-                                        <button 
-                                            onClick={() => handleUpdateStatus(order.id, 'completed')}
-                                            className="text-xs font-bold text-green-600 hover:bg-green-50 px-2 py-1 rounded transition-colors"
-                                        >
-                                            Complete
-                                        </button>
-                                    )}
-                                    {order.status !== 'cancelled' && (
-                                        <button 
-                                            onClick={() => handleUpdateStatus(order.id, 'cancelled')}
-                                            className="text-xs font-bold text-red-600 hover:bg-red-50 px-2 py-1 rounded transition-colors"
-                                        >
-                                            Cancel
-                                        </button>
-                                    )}
-                                </div>
-                            </td>
-                        </tr>
+    const pendingOrders = orders.filter(o => o.status === 'pending');
+    const preparingOrders = orders.filter(o => o.status === 'preparing');
+    const completedOrders = orders.filter(o => o.status === 'completed');
+    const cancelledOrders = orders.filter(o => o.status === 'cancelled');
+
+    const getTimeAgo = (timestamp?: string) => {
+        if (!timestamp) return "Just now";
+        const mins = Math.floor((new Date().getTime() - new Date(timestamp).getTime()) / 60000);
+        if (mins < 1) return "< 1 min ago";
+        if (mins === 1) return "1 min ago";
+        if (mins > 60) return `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+        return `${mins} mins ago`;
+    };
+
+    const OrderCard = ({ order, status }: { order: any, status: 'pending' | 'preparing' | 'completed' }) => {
+        const items = JSON.parse(order.items || "[]");
+        
+        return (
+            <div className={`bg-white rounded-xl shadow-sm border p-4 flex flex-col gap-3 transition-all ${
+                status === 'completed' ? 'border-[#1D9E75]/30' : 'border-gray-200'
+            }`}>
+                <div className="flex justify-between items-start">
+                    <div>
+                        <span className="font-black text-lg text-[#1A1A2E]">#{order.id}</span>
+                        <p className="text-sm font-bold text-gray-700 mt-1">{order.customer_name}</p>
+                    </div>
+                    <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded-md">
+                        {getTimeAgo(order.created_at)}
+                    </span>
+                </div>
+                
+                <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-800 space-y-1">
+                    {items.map((item: any, idx: number) => (
+                        <div key={idx} className="flex justify-between font-medium">
+                            <span>1x {item.name}</span>
+                        </div>
                     ))}
-                    {orders.length === 0 && (
-                        <tr>
-                            <td colSpan={6} className="text-center py-12 text-gray-500 font-medium">No orders found</td>
-                        </tr>
+                </div>
+
+                <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+                    <span className="font-bold text-[#1D9E75]">₹{Math.round(order.total)}</span>
+                    {order.customer_phone && <span className="text-xs text-gray-500">{order.customer_phone}</span>}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                    {status === 'pending' && (
+                        <>
+                            <button 
+                                onClick={() => handleUpdateStatus(order.id, 'preparing')}
+                                className="col-span-2 bg-[#FF6B35] text-white hover:bg-[#E85D2A] font-bold py-2 rounded-lg text-sm transition-colors"
+                            >
+                                Start Preparing
+                            </button>
+                            <button 
+                                onClick={() => handleUpdateStatus(order.id, 'cancelled')}
+                                className="col-span-2 bg-transparent text-[#E24B4A] hover:bg-red-50 border border-red-100 font-bold py-1.5 rounded-lg text-xs transition-colors"
+                            >
+                                Cancel Order
+                            </button>
+                        </>
                     )}
-                </tbody>
-            </table>
+                    {status === 'preparing' && (
+                        <>
+                            <button 
+                                onClick={() => handleUpdateStatus(order.id, 'completed')}
+                                className="col-span-2 bg-[#1D9E75] text-white hover:bg-[#15805E] font-bold py-2 rounded-lg text-sm transition-colors"
+                            >
+                                Mark Completed
+                            </button>
+                            <button 
+                                onClick={() => handleUpdateStatus(order.id, 'cancelled')}
+                                className="col-span-2 bg-transparent text-[#E24B4A] hover:bg-red-50 border border-red-100 font-bold py-1.5 rounded-lg text-xs transition-colors"
+                            >
+                                Cancel Order
+                            </button>
+                        </>
+                    )}
+                    {status === 'completed' && (
+                        <div className="col-span-2 text-center py-2 bg-green-50 text-[#1D9E75] rounded-lg text-sm font-bold flex flex-col justify-center gap-1">
+                            <span>Completed successfully</span>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className="flex flex-col gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Pending Column */}
+                <div className="flex flex-col gap-4 bg-gray-50/50 rounded-2xl p-4 border border-gray-100 min-h-[500px]">
+                    <div className="flex justify-between items-center mb-2 px-1">
+                        <h2 className="font-black text-gray-800 uppercase tracking-wide text-sm">Order Received</h2>
+                        <span className="bg-gray-200 text-gray-700 text-xs font-bold px-2 py-0.5 rounded-full">{pendingOrders.length}</span>
+                    </div>
+                    {pendingOrders.map(order => (
+                        <OrderCard key={order.id} order={order} status="pending" />
+                    ))}
+                    {pendingOrders.length === 0 && (
+                        <div className="text-center py-10 text-gray-400 font-medium text-sm">No new orders</div>
+                    )}
+                </div>
+
+                {/* Preparing Column */}
+                <div className="flex flex-col gap-4 bg-gray-50/50 rounded-2xl p-4 border border-gray-100 min-h-[500px]">
+                    <div className="flex justify-between items-center mb-2 px-1">
+                        <h2 className="font-black text-gray-800 uppercase tracking-wide text-sm">Preparing</h2>
+                        <span className="bg-[#FF6B35]/10 text-[#FF6B35] text-xs font-bold px-2 py-0.5 rounded-full">{preparingOrders.length}</span>
+                    </div>
+                    {preparingOrders.map(order => (
+                        <OrderCard key={order.id} order={order} status="preparing" />
+                    ))}
+                    {preparingOrders.length === 0 && (
+                        <div className="text-center py-10 text-gray-400 font-medium text-sm">No active prep</div>
+                    )}
+                </div>
+
+                {/* Completed Column */}
+                <div className="flex flex-col gap-4 bg-green-50/30 rounded-2xl p-4 border border-green-50 min-h-[500px]">
+                    <div className="flex justify-between items-center mb-2 px-1">
+                        <h2 className="font-black text-[#1D9E75] uppercase tracking-wide text-sm">Completed</h2>
+                        <span className="bg-[#1D9E75]/10 text-[#1D9E75] text-xs font-bold px-2 py-0.5 rounded-full">{completedOrders.length}</span>
+                    </div>
+                    {completedOrders.map(order => (
+                        <OrderCard key={order.id} order={order} status="completed" />
+                    ))}
+                    {completedOrders.length === 0 && (
+                        <div className="text-center py-10 text-green-700/50 font-medium text-sm">No completions yet</div>
+                    )}
+                </div>
+            </div>
+
+            {/* Cancelled Section */}
+            {cancelledOrders.length > 0 && (
+                <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden mt-4">
+                    <button 
+                        onClick={() => setShowCancelled(!showCancelled)}
+                        className="w-full px-6 py-4 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors"
+                    >
+                        <h3 className="font-bold text-gray-700">Cancelled Orders ({cancelledOrders.length})</h3>
+                        <svg className={`w-5 h-5 text-gray-500 transform transition-transform ${showCancelled ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
+                    {showCancelled && (
+                        <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-gray-50 border-t border-gray-200">
+                            {cancelledOrders.map(order => (
+                                <div key={order.id} className="bg-white p-4 rounded-xl border border-red-100 shadow-sm opacity-70">
+                                    <div className="flex justify-between mb-2">
+                                        <span className="font-bold text-gray-800">#{order.id}</span>
+                                        <span className="text-xs font-bold text-[#E24B4A]">CANCELLED</span>
+                                    </div>
+                                    <p className="text-sm text-gray-500 truncate">
+                                        {JSON.parse(order.items || "[]").map((i: any) => i.name).join(", ")}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
