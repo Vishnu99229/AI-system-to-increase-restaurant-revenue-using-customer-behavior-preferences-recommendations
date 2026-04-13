@@ -52,6 +52,7 @@ const pool = new Pool({
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(20)`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending'`);
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS table_number VARCHAR(20)`);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS admins (
@@ -513,8 +514,8 @@ app.post("/api/:slug/order-complete", async (req, res) => {
 
         const { items, total, customer_name, customer_phone, upsellAccepted, upsellValue, tableNumber } = req.body;
         const result = await pool.query(
-            "INSERT INTO orders (restaurant_id, items, total, customer_name, customer_phone, pairing_accepted) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-            [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted]
+            "INSERT INTO orders (restaurant_id, items, total, customer_name, customer_phone, pairing_accepted, table_number) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted, tableNumber || null]
         );
 
         res.json({ success: true, orderId: result.rows[0].id });
