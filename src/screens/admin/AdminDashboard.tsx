@@ -407,7 +407,7 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         { label: "Total Revenue", value: `₹${data.totalRevenue.toLocaleString()}`, color: "bg-green-50 text-green-700" },
         { label: "Total Orders", value: data.totalOrders, color: "bg-blue-50 text-blue-700" },
         { label: "Avg Order Value", value: `₹${data.aov.toFixed(2)}`, color: "bg-purple-50 text-purple-700" },
-        { label: "Upsell Revenue", value: `₹${data.upsellRevenue.toLocaleString()}`, color: "bg-orange-50 text-orange-700", highlight: true },
+        { label: "Upsell Revenue", value: `₹${(data.confirmedUpsellRevenue || 0).toLocaleString()}`, color: "bg-orange-50 text-orange-700", highlight: true },
     ];
 
     return (
