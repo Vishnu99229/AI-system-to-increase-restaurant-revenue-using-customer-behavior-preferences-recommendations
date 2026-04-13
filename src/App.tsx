@@ -6,7 +6,9 @@ import InvalidTable from "./screens/InvalidTable";
 import QRPrintPage from "./screens/QRPrintPage";
 import AdminLogin from "./screens/admin/AdminLogin";
 import AdminDashboard from "./screens/admin/AdminDashboard";
+import PassportEntry from "./components/PassportEntry";
 import { AppProvider, useApp } from "./contexts/AppContext";
+import { getRestaurantConfig } from "./config/restaurants";
 
 
 function AppContent() {
@@ -90,7 +92,9 @@ function AppContent() {
     return (
         <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-2xl overflow-hidden">
             {screen === "landing" && (
-                <Landing onViewMenu={() => setScreen("menu")} />
+                getRestaurantConfig(state.restaurantId).entryExperience === 'passport'
+                    ? <PassportEntry onViewMenu={() => setScreen("menu")} />
+                    : <Landing onViewMenu={() => setScreen("menu")} />
             )}
             {screen === "menu" && (
                 <Menu
