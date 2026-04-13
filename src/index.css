@@ -56,3 +56,13 @@ body {
     opacity: 1;
   }
 }
+
+/* Pulse highlight for fresh item rows (< 2 min old) */
+@keyframes pulseHighlight {
+  0%, 100% { background-color: rgba(255, 107, 53, 0.15); }
+  50% { background-color: rgba(255, 107, 53, 0); }
+}
+.animate-pulse-highlight {
+  animation: pulseHighlight 1s ease-in-out infinite;
+}
+

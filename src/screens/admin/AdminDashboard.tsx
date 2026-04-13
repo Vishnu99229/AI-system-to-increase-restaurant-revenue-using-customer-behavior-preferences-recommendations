@@ -85,10 +85,34 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode; a
     );
 }
 
+// -----------------------------------------------------------------
+// Response shape from GET /api/admin/:slug/orders (SELECT * FROM orders):
+//   id            : number
+//   restaurant_id : number
+//   items         : string | array  (JSON.stringify'd on insert, but
+//                   pg driver may auto-parse if column is json/jsonb)
+//   total         : number (numeric)
+//   customer_name : string
+//   customer_phone: string
+//   status        : 'pending' | 'preparing' | 'completed' | 'cancelled'
+//   created_at    : string (ISO timestamp)
+//   table_number  : string | null
+//   pairing_accepted: boolean
+// -----------------------------------------------------------------
+
+// --- Item row for a single table ---
+interface ItemRow {
+    name: string;
+    qty: number;
+    orderId: number;
+    orderedAt: string;
+    itemKey: string;
+}
+
 // --- Active Tables types ---
 interface TableGroup {
     tableNumber: string;
-    items: { name: string; qty: number }[];
+    itemRows: ItemRow[];
     total: number;
     earliestOrder: string;
     orderIds: number[];
@@ -98,6 +122,21 @@ interface ActiveAlert {
     level: "strong" | "medium";
     tableNumber?: string;
     unseenUpdates?: number;
+}
+
+// --- Safe items parser ---
+// Handles: JSON string, already-parsed array, null, undefined
+function safeParseItems(raw: any): any[] {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string") {
+        try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    }
+    return [];
 }
 
 // --- Audio helper ---
@@ -126,6 +165,7 @@ function playBeep(frequency: number, durationMs: number, gain: number): void {
 function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     const [activeTables, setActiveTables] = useState<TableGroup[]>([]);
     const [activeAlert, setActiveAlert] = useState<ActiveAlert | null>(null);
+    const [, setTick] = useState(0); // forces re-render for blink expiry
 
     const intervalRef = useRef<number | undefined>(undefined);
     const prevTableIdsRef = useRef<Set<string> | null>(null);
@@ -136,19 +176,25 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     const activeTablesPanelRef = useRef<HTMLDivElement>(null);
 
     // --- Build active tables from raw orders ---
+    // Each order's items are flattened into individual ItemRows, sorted newest first.
     const buildActiveTables = (orders: any[]): TableGroup[] => {
         const activeOrders = orders.filter(
             (o: any) => o.status === "pending" || o.status === "preparing"
         );
 
-        const grouped: Record<string, { items: Record<string, number>; total: number; earliest: string; orderIds: number[] }> = {};
+        const grouped: Record<string, {
+            itemRows: ItemRow[];
+            total: number;
+            earliest: string;
+            orderIds: number[];
+        }> = {};
 
         for (const order of activeOrders) {
             const tn = order.table_number;
             if (!tn) continue;
 
             if (!grouped[tn]) {
-                grouped[tn] = { items: {}, total: 0, earliest: order.created_at, orderIds: [] };
+                grouped[tn] = { itemRows: [], total: 0, earliest: order.created_at, orderIds: [] };
             }
 
             const group = grouped[tn];
@@ -159,21 +205,26 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                 group.earliest = order.created_at;
             }
 
-            try {
-                const parsed = JSON.parse(order.items || "[]");
-                for (const item of parsed) {
-                    const name = item.name || "Unknown item";
-                    group.items[name] = (group.items[name] || 0) + 1;
-                }
-            } catch {
-                // skip malformed items
-            }
+            // Safely parse items (handles string, array, null)
+            const items = safeParseItems(order.items);
+            items.forEach((item: any, idx: number) => {
+                group.itemRows.push({
+                    name: item.name || "Unknown item",
+                    qty: 1,
+                    orderId: order.id,
+                    orderedAt: order.created_at || "",
+                    itemKey: `${order.id}-${idx}`,
+                });
+            });
         }
 
         return Object.entries(grouped)
             .map(([tableNumber, g]) => ({
                 tableNumber,
-                items: Object.entries(g.items).map(([name, qty]) => ({ name, qty })),
+                // Sort newest first
+                itemRows: g.itemRows.sort((a, b) =>
+                    new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime()
+                ),
                 total: g.total,
                 earliestOrder: g.earliest,
                 orderIds: g.orderIds,
@@ -198,16 +249,13 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 
     // --- Fire STRONG alert ---
     const fireStrongAlert = (tableNumber: string) => {
-        // Clear any existing alert first
         dismissAlert();
 
         setActiveAlert({ level: "strong", tableNumber });
 
-        // Immediate beep
         playBeep(1000, 300, 0.3);
         repeatCountRef.current = 1;
 
-        // Repeat beep every 5s, max 6 repeats
         repeatIntervalRef.current = window.setInterval(() => {
             repeatCountRef.current += 1;
             if (repeatCountRef.current >= 6) {
@@ -218,7 +266,6 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             playBeep(1000, 300, 0.3);
         }, 5000);
 
-        // Flash title every 1s
         let showNew = true;
         titleIntervalRef.current = window.setInterval(() => {
             document.title = showNew ? "(NEW) Admin Panel" : "Admin Panel";
@@ -228,7 +275,6 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 
     // --- Fire MEDIUM alert ---
     const fireMediumAlert = (unseenUpdates: number) => {
-        // Single beep
         playBeep(800, 200, 0.2);
 
         setActiveAlert((prev) => ({
@@ -252,7 +298,6 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             }
         }
 
-        // Trigger immediate refetch
         fetchActiveTables();
     };
 
@@ -263,10 +308,10 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             const tables = buildActiveTables(orders);
             setActiveTables(tables);
 
-            // Build current snapshots
+            // Build current snapshots (item row count per table)
             const currentTableIds = new Set(tables.map((t) => t.tableNumber));
             const currentItemCounts = new Map(
-                tables.map((t) => [t.tableNumber, t.items.reduce((sum, i) => sum + i.qty, 0)])
+                tables.map((t) => [t.tableNumber, t.itemRows.reduce((sum, r) => sum + r.qty, 0)])
             );
 
             // First poll: initialize refs, no alerts
@@ -320,6 +365,12 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         };
     }, [slug]);
 
+    // --- Tick every 10s to expire blink animations ---
+    useEffect(() => {
+        const tickInterval = window.setInterval(() => setTick((t) => t + 1), 10000);
+        return () => window.clearInterval(tickInterval);
+    }, []);
+
     // --- Dismiss on window focus ---
     useEffect(() => {
         const handler = () => dismissAlert();
@@ -327,7 +378,7 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         return () => window.removeEventListener("focus", handler);
     }, []);
 
-    // --- Time helper ---
+    // --- Time helpers ---
     const getTimeAgo = (timestamp?: string) => {
         if (!timestamp) return "Just now";
         const mins = Math.floor((new Date().getTime() - new Date(timestamp).getTime()) / 60000);
@@ -335,6 +386,19 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         if (mins === 1) return "1 min ago";
         if (mins > 60) return `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
         return `${mins} mins ago`;
+    };
+
+    const getMinsAgo = (timestamp?: string) => {
+        if (!timestamp) return "now";
+        const mins = Math.floor((new Date().getTime() - new Date(timestamp).getTime()) / 60000);
+        if (mins < 1) return "<1m ago";
+        return `${mins}m ago`;
+    };
+
+    const isFresh = (timestamp?: string): boolean => {
+        if (!timestamp) return false;
+        const diffSec = (new Date().getTime() - new Date(timestamp).getTime()) / 1000;
+        return diffSec < 120;
     };
 
     if (!data) return null;
@@ -447,40 +511,55 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {activeTables.map((table) => (
-                            <div key={table.tableNumber} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                                {/* Header */}
-                                <div className="flex items-center justify-between mb-3">
-                                    <span className="font-black text-lg text-[#1A1A2E]">Table {table.tableNumber}</span>
-                                    <span className="text-xs font-bold text-white bg-[#FF6B35] px-2.5 py-1 rounded-full">
-                                        {table.items.reduce((sum, i) => sum + i.qty, 0)} items
-                                    </span>
-                                </div>
+                        {activeTables.map((table) => {
+                            const totalQty = table.itemRows.reduce((sum, r) => sum + r.qty, 0);
+                            return (
+                                <div key={table.tableNumber} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                                    {/* Header */}
+                                    <div className="flex items-center justify-between mb-3">
+                                        <span className="font-black text-lg text-[#1A1A2E]">Table {table.tableNumber}</span>
+                                        <span className="text-xs font-bold text-white bg-[#FF6B35] px-2.5 py-1 rounded-full">
+                                            {totalQty} items
+                                        </span>
+                                    </div>
 
-                                {/* Items List */}
-                                <div className="bg-gray-50 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1.5">
-                                    {table.items.map((item, idx) => (
-                                        <div key={idx} className="text-sm font-medium text-gray-800">
-                                            {item.qty}x {item.name}
-                                        </div>
-                                    ))}
-                                </div>
+                                    {/* Items List - per-order-item rows, newest on top */}
+                                    <div className="bg-gray-50 rounded-lg p-3 max-h-48 overflow-y-auto">
+                                        {table.itemRows.map((row) => (
+                                            <div
+                                                key={row.itemKey}
+                                                className={`flex items-center justify-between py-1.5 px-2 rounded ${
+                                                    isFresh(row.orderedAt)
+                                                        ? "animate-pulse-highlight"
+                                                        : ""
+                                                }`}
+                                            >
+                                                <span className="text-sm font-medium text-gray-800">
+                                                    {row.qty}x {row.name}
+                                                </span>
+                                                <span className="text-xs text-gray-400">
+                                                    {getMinsAgo(row.orderedAt)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
 
-                                {/* Footer */}
-                                <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-                                    <span className="font-bold text-[#1D9E75]">₹{Math.round(table.total)}</span>
-                                    <span className="text-xs text-gray-400 font-medium">Started {getTimeAgo(table.earliestOrder)}</span>
-                                </div>
+                                    {/* Footer */}
+                                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                                        <span className="font-bold text-[#1D9E75]">₹{Math.round(table.total)}</span>
+                                        <span className="text-xs text-gray-400 font-medium">Started {getTimeAgo(table.earliestOrder)}</span>
+                                    </div>
 
-                                {/* Close Table Button */}
-                                <button
-                                    onClick={() => handleCloseTable(table)}
-                                    className="w-full bg-[#1D9E75] text-white hover:bg-[#15805E] font-bold py-2 rounded-lg text-sm mt-2 transition-colors"
-                                >
-                                    Close Table
-                                </button>
-                            </div>
-                        ))}
+                                    {/* Close Table Button */}
+                                    <button
+                                        onClick={() => handleCloseTable(table)}
+                                        className="w-full bg-[#1D9E75] text-white hover:bg-[#15805E] font-bold py-2 rounded-lg text-sm mt-2 transition-colors"
+                                    >
+                                        Close Table
+                                    </button>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>
