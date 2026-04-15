@@ -68,6 +68,30 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [items, setItems] = useState<Item[]>(state.menuItems);
     const [loading, setLoading] = useState(state.menuItems.length === 0);
 
+    const [sessionOrders, setSessionOrders] = useState<any[]>([]);
+
+    useEffect(() => {
+        if (!state.restaurantId) return;
+        try {
+            const sessionOrdersKey = `${state.restaurantId}_session_orders`;
+            const stored = localStorage.getItem(sessionOrdersKey);
+            if (stored) {
+                setSessionOrders(JSON.parse(stored));
+            }
+        } catch (err) {
+            console.warn("Failed to parse session orders:", err);
+        }
+    }, [state.restaurantId]);
+
+    const getRelativeTime = (placedAt: string) => {
+        const diffMs = Date.now() - new Date(placedAt).getTime();
+        const mins = Math.round(diffMs / 60000);
+        if (mins < 1) return "just now";
+        if (mins < 60) return `${mins}m ago`;
+        const hours = Math.round(mins / 60);
+        return `${hours}h ago`;
+    };
+
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [showAddedToast, setShowAddedToast] = useState(false);
@@ -361,6 +385,47 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             </span>
                         )}
                     </div>
+
+                    {/* YOUR ORDERS TODAY section */}
+                    {sessionOrders.length > 0 && (
+                        <div className="px-4 py-3 mb-3 bg-white w-full max-w-md mx-auto">
+                            <h3 className="text-xs font-bold tracking-wider mb-2" style={{ color: "rgba(26, 26, 46, 0.5)", textTransform: "uppercase" }}>
+                                YOUR ORDERS TODAY
+                            </h3>
+                            <div 
+                                className="flex flex-row gap-2 overflow-x-auto pb-1"
+                                style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+                            >
+                                <style>{`
+                                    .hide-scrollbar::-webkit-scrollbar {
+                                        display: none;
+                                    }
+                                `}</style>
+                                <div className="flex gap-2 hide-scrollbar">
+                                    {sessionOrders.map((order, i) => (
+                                        <div 
+                                            key={order.id} 
+                                            className="bg-white rounded-xl p-3 flex flex-col gap-1 border"
+                                            style={{ minWidth: "180px", maxWidth: "200px", borderColor: "rgba(0,0,0,0.06)" }}
+                                        >
+                                            <div className="text-[11px] font-medium" style={{ color: "rgba(26,26,46,0.5)" }}>
+                                                Order #{sessionOrders.length - i} &middot; Table {order.tableNumber}
+                                            </div>
+                                            <div className="text-sm font-semibold text-[#1A1A2E] line-clamp-2 leading-tight">
+                                                {order.items.map((it: any) => it.name).join(", ")}
+                                            </div>
+                                            <div className="flex justify-between items-center mt-auto pt-1">
+                                                <span className="font-bold text-sm text-[#FF6B35]">₹{Math.round(order.total)}</span>
+                                                <span className="text-[11px]" style={{ color: "rgba(26,26,46,0.4)" }}>
+                                                    {getRelativeTime(order.placedAt)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Search bar */}
                     <div className="px-4 py-2">

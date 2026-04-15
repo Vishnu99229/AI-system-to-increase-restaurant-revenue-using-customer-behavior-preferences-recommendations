@@ -71,22 +71,21 @@ export async function trackOrderComplete(
     customerName: string = "",
     customerPhone: string = ""
 ): Promise<void> {
-    try {
-        await fetch(`${API_BASE}/api/${slug}/order-complete`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                orderId,
-                total: totalValue,
-                upsellAccepted,
-                upsellValue,
-                items,
-                tableNumber,
-                customer_name: customerName,
-                customer_phone: customerPhone,
-            }),
-        });
-    } catch (error) {}
+    const res = await fetch(`${API_BASE}/api/${slug}/order-complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            orderId,
+            total: totalValue,
+            upsellAccepted,
+            upsellValue,
+            items,
+            tableNumber,
+            customer_name: customerName,
+            customer_phone: customerPhone,
+        }),
+    });
+    if (!res.ok) throw new Error("Order failed");
 }
 
 // --- Customer Login (after Firebase phone verification) ---

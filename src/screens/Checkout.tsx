@@ -175,6 +175,8 @@ export default function Checkout({ onBack }: CheckoutProps) {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [showPhoneModal, setShowPhoneModal] = useState(false);
     const [verifiedPhone, setVerifiedPhone] = useState("");
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [showErrorToast, setShowErrorToast] = useState(false);
 
     // Check localStorage for cached phone verification on mount
     useEffect(() => {
@@ -191,8 +193,11 @@ export default function Checkout({ onBack }: CheckoutProps) {
         }
     }, []);
 
-    const submitOrder = useCallback((phone: string) => {
+    const submitOrder = useCallback(async (phone: string) => {
         setIsSubmitting(true);
+        setShowErrorToast(false);
+
+        const orderId = Date.now().toString();
 
         console.log("Order placed:", {
             user: state.userName,
@@ -200,25 +205,47 @@ export default function Checkout({ onBack }: CheckoutProps) {
             total: total.toFixed(2),
         });
 
-        // Fire-and-forget analytics via slug-based endpoint
-        trackOrderComplete(
-            state.restaurantId, // slug
-            Date.now().toString(), // Simple ID generation
-            total,
-            upsellAccepted,
-            upsellValue,
-            cartItems.map(item => ({ name: item.name, price: item.price, is_upsell: item.is_upsell || false })),
-            state.tableNumber,
-            state.customerName,
-            phone
-        );
+        try {
+            await trackOrderComplete(
+                state.restaurantId,
+                orderId,
+                total,
+                upsellAccepted,
+                upsellValue,
+                cartItems.map(item => ({ name: item.name, price: item.price, is_upsell: item.is_upsell || false })),
+                state.tableNumber,
+                state.customerName,
+                phone
+            );
 
-        console.log("[order] order placed");
-        alert("Order placed! (Check console for details)");
-        // Reset session state after successful order, then navigate back
-        resetSessionAfterOrder();
-        onBack();
-    }, [isSubmitting, state, cartItems, total, upsellAccepted, upsellValue, resetSessionAfterOrder, onBack]);
+            // Save order to localStorage
+            try {
+                const sessionOrdersKey = `${state.restaurantId}_session_orders`;
+                const existingRaw = localStorage.getItem(sessionOrdersKey);
+                const existing = existingRaw ? JSON.parse(existingRaw) : [];
+                const newOrder = {
+                    id: orderId,
+                    placedAt: new Date().toISOString(),
+                    tableNumber: state.tableNumber,
+                    items: cartItems.map(item => ({ name: item.name, price: parsePrice(item.price), qty: 1 })),
+                    total: Math.round(total)
+                };
+                existing.unshift(newOrder);
+                localStorage.setItem(sessionOrdersKey, JSON.stringify(existing));
+            } catch (err) {
+                console.warn("Failed to save session order:", err);
+            }
+
+            console.log("[order] order placed");
+            setIsModalOpen(true);
+        } catch (error) {
+            console.error("Order failed:", error);
+            setShowErrorToast(true);
+            setTimeout(() => setShowErrorToast(false), 3000);
+        } finally {
+            setIsSubmitting(false);
+        }
+    }, [state, cartItems, total, upsellAccepted, upsellValue]);
 
     const handlePlaceOrder = () => {
         if (isSubmitting) return;
@@ -423,6 +450,50 @@ export default function Checkout({ onBack }: CheckoutProps) {
                     onVerified={handlePhoneVerified}
                     onClose={() => setShowPhoneModal(false)}
                 />
+            )}
+
+            {/* Error Toast */}
+            {showErrorToast && (
+                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg px-4 py-2 bg-[#E24B4A] text-white font-medium text-sm shadow-lg">
+                    Couldn't place order. Please try again.
+                </div>
+            )}
+
+            {/* Success Modal */}
+            {isModalOpen && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                    <style>{`
+                        @keyframes modalScaleIn {
+                            from { transform: scale(0.95); opacity: 0; }
+                            to { transform: scale(1); opacity: 1; }
+                        }
+                    `}</style>
+                    <div className="bg-white rounded-2xl p-6 sm:p-8 shadow-2xl w-full max-w-sm animate-[modalScaleIn_0.2s_ease-out]">
+                        <div className="flex justify-center mb-4">
+                            <div className="w-16 h-16 bg-[#1D9E75] rounded-full flex items-center justify-center">
+                                <span className="text-3xl font-bold text-white">✓</span>
+                            </div>
+                        </div>
+                        <h2 className="text-2xl font-black text-[#1A1A2E] text-center mb-2">Order in! 🎉</h2>
+                        <p className="text-base font-medium text-[#1A1A2E]/70 text-center mb-6">
+                            {(state.userName || state.customerName) && state.tableNumber
+                                ? `Hang tight, ${state.userName || state.customerName}. The chef's been pinged and your order is on the way to Table ${state.tableNumber}.`
+                                : state.tableNumber
+                                ? `Hang tight! The chef's been pinged and your order is on the way to Table ${state.tableNumber}.`
+                                : `Hang tight! The chef's been pinged. Your order is on the way.`}
+                        </p>
+                        <button
+                            onClick={() => {
+                                setIsModalOpen(false);
+                                resetSessionAfterOrder();
+                                onBack();
+                            }}
+                            className="w-full bg-[#FF6B35] text-white font-bold text-base py-3 px-6 rounded-xl hover:bg-orange-600 active:scale-[0.98] transition-all"
+                        >
+                            Back to Menu
+                        </button>
+                    </div>
+                </div>
             )}
         </div>
     );
