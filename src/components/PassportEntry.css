@@ -107,6 +107,7 @@
 }
 
 .passport-card-front {
+  pointer-events: auto;
   position: relative;
   background:
     repeating-linear-gradient(
@@ -124,6 +125,7 @@
 }
 
 .passport-card-back {
+  pointer-events: none;
   position: absolute;
   inset: 0;
   transform: rotateY(180deg);
@@ -140,6 +142,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Swap pointer-events when card is flipped */
+.passport-card.passport-card-flipped .passport-card-front {
+  pointer-events: none;
+}
+
+.passport-card.passport-card-flipped .passport-card-back {
+  pointer-events: auto;
 }
 
 /* ===== Card Front Content ===== */
