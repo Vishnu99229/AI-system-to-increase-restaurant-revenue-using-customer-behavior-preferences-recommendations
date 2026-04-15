@@ -66,3 +66,11 @@ body {
   animation: pulseHighlight 1s ease-in-out infinite;
 }
 
+/* Welcome-back toast fade animation */
+@keyframes welcomeFade {
+  0% { opacity: 0; }
+  15% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+

@@ -11,6 +11,12 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
     const [analytics, setAnalytics] = useState<any>(null);
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [soundUnlocked, setSoundUnlocked] = useState(false);
+
+    const handleEnableSound = () => {
+        playBeep(440, 50, 0.01);
+        setSoundUnlocked(true);
+    };
 
     const loadData = async () => {
         setLoading(true);
@@ -54,6 +60,23 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                 <TabButton active={activeTab === "analytics"} onClick={() => setActiveTab("analytics")}>Analytics</TabButton>
                 <TabButton active={activeTab === "menu"} onClick={() => setActiveTab("menu")}>Menu Manager</TabButton>
             </nav>
+
+            {/* Sound unlock banner */}
+            {!soundUnlocked ? (
+                <div className="bg-[#FF6B35] text-white px-6 py-3 flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-sm font-medium">Tap Enable Sound to receive order alerts</span>
+                    <button
+                        onClick={handleEnableSound}
+                        className="bg-white text-[#FF6B35] font-bold px-4 py-1.5 rounded-lg text-sm hover:bg-orange-50 transition-colors"
+                    >
+                        Enable Sound
+                    </button>
+                </div>
+            ) : (
+                <div className="bg-[#1D9E75] text-white px-6 py-1.5 text-xs font-semibold flex items-center gap-1.5">
+                    🔔 Sound enabled
+                </div>
+            )}
 
             {/* Content Area */}
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
@@ -162,6 +185,36 @@ function playBeep(frequency: number, durationMs: number, gain: number): void {
     }
 }
 
+function playBeepAsync(frequency: number, durationMs: number, gain: number): Promise<void> {
+    return new Promise((resolve) => {
+        try {
+            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+            if (!AudioCtx) { resolve(); return; }
+            const ctx = new AudioCtx();
+            const osc = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+
+            osc.connect(gainNode);
+            gainNode.connect(ctx.destination);
+
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+            gainNode.gain.setValueAtTime(gain, ctx.currentTime);
+
+            osc.onended = () => {
+                ctx.close().catch(() => {});
+                resolve();
+            };
+
+            osc.start();
+            osc.stop(ctx.currentTime + durationMs / 1000);
+        } catch (err) {
+            console.error("Audio beep failed:", err);
+            resolve();
+        }
+    });
+}
+
 function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     const [activeTables, setActiveTables] = useState<TableGroup[]>([]);
     const [activeAlert, setActiveAlert] = useState<ActiveAlert | null>(null);
@@ -174,6 +227,8 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     const titleIntervalRef = useRef<number | undefined>(undefined);
     const repeatCountRef = useRef<number>(0);
     const activeTablesPanelRef = useRef<HTMLDivElement>(null);
+    const alertSeqRef = useRef<number>(0);
+    const [isAlerting, setIsAlerting] = useState(false);
 
     // --- Build active tables from raw orders ---
     // Each order's items are flattened into individual ItemRows, sorted newest first.
@@ -243,28 +298,33 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             titleIntervalRef.current = undefined;
         }
         repeatCountRef.current = 0;
+        alertSeqRef.current++;
+        setIsAlerting(false);
         document.title = "Admin Panel";
         setActiveAlert(null);
     };
 
-    // --- Fire STRONG alert ---
+    // --- Fire STRONG alert (7 sequential beeps) ---
     const fireStrongAlert = (tableNumber: string) => {
         dismissAlert();
 
         setActiveAlert({ level: "strong", tableNumber });
 
-        playBeep(1000, 300, 0.3);
-        repeatCountRef.current = 1;
-
-        repeatIntervalRef.current = window.setInterval(() => {
-            repeatCountRef.current += 1;
-            if (repeatCountRef.current >= 6) {
-                if (repeatIntervalRef.current) window.clearInterval(repeatIntervalRef.current);
-                repeatIntervalRef.current = undefined;
-                return;
+        // Play 7 sequential beeps using async chain
+        const seqId = ++alertSeqRef.current;
+        setIsAlerting(true);
+        (async () => {
+            for (let i = 0; i < 7; i++) {
+                if (alertSeqRef.current !== seqId) return;
+                await playBeepAsync(1000, 300, 0.3);
+                if (alertSeqRef.current !== seqId) return;
+                if (i < 6) await new Promise<void>(r => setTimeout(r, 300));
             }
-            playBeep(1000, 300, 0.3);
-        }, 5000);
+            // Auto-clear alerting state when loop completes naturally
+            if (alertSeqRef.current === seqId) {
+                setIsAlerting(false);
+            }
+        })();
 
         let showNew = true;
         titleIntervalRef.current = window.setInterval(() => {
@@ -412,6 +472,19 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 
     return (
         <div className="space-y-8">
+            {/* Stop Alert button (visible during 7-beep sequence) */}
+            {isAlerting && (
+                <button
+                    onClick={() => {
+                        alertSeqRef.current++;
+                        setIsAlerting(false);
+                    }}
+                    className="w-full bg-[#E24B4A] text-white font-bold py-3 px-6 rounded-xl text-base transition-all hover:bg-red-600 active:scale-[0.98]"
+                >
+                    Stop Alert
+                </button>
+            )}
+
             {/* Notification Banner (STRONG alert only) */}
             {activeAlert?.level === "strong" && (
                 <div
