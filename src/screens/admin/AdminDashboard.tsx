@@ -353,7 +353,10 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         }, 1000);
     };
 
-   // --- Fire MEDIUM alert (5 sequential beeps) ---
+    // --- Fire MEDIUM alert (5 sequential beeps, fire-and-forget, NOT cancelable) ---
+    // Does NOT use alertSeqRef. Medium beeps are short (~2 seconds total) and must
+    // play to completion even if dismissAlert is called (via window focus, panel click,
+    // or dismiss button) during the loop.
     const fireMediumAlert = (unseenUpdates: number) => {
         setActiveAlert((prev) => ({
             level: "medium",
@@ -362,13 +365,10 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 
         document.title = `(${unseenUpdates} update) Admin Panel`;
 
-        // Play 5 sequential beeps using async chain
-        const seqId = ++alertSeqRef.current;
+        // Play 5 sequential beeps. No cancellation. Run to completion always.
         (async () => {
             for (let i = 0; i < 5; i++) {
-                if (alertSeqRef.current !== seqId) return;
                 await playBeepAsync(800, 200, 0.2);
-                if (alertSeqRef.current !== seqId) return;
                 if (i < 4) await new Promise<void>(r => setTimeout(r, 250));
             }
         })();
