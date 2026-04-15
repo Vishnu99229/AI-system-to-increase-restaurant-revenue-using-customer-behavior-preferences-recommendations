@@ -163,21 +163,39 @@ function safeParseItems(raw: any): any[] {
 }
 
 // --- Audio helper ---
-function playBeep(frequency: number, durationMs: number, gain: number): void {
+// Shared AudioContext singleton. Created once on first use, reused for all beeps
+// so the user gesture unlock from the Enable Sound button persists across all
+// subsequent notification beeps. Without this, Chrome silently blocks each new
+// AudioContext after the first one because there is no fresh user gesture.
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioCtx(): AudioContext | null {
+    if (sharedAudioCtx) return sharedAudioCtx;
     try {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (!AudioCtx) return;
-        const ctx = new AudioCtx();
+        if (!AudioCtx) return null;
+        sharedAudioCtx = new AudioCtx();
+        return sharedAudioCtx;
+    } catch (err) {
+        console.error("Failed to create AudioContext:", err);
+        return null;
+    }
+}
+
+function playBeep(frequency: number, durationMs: number, gain: number): void {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    try {
+        if (ctx.state === "suspended") {
+            ctx.resume().catch(() => {});
+        }
         const osc = ctx.createOscillator();
         const gainNode = ctx.createGain();
-
         osc.connect(gainNode);
         gainNode.connect(ctx.destination);
-
         osc.type = "sine";
         osc.frequency.setValueAtTime(frequency, ctx.currentTime);
         gainNode.gain.setValueAtTime(gain, ctx.currentTime);
-
         osc.start();
         osc.stop(ctx.currentTime + durationMs / 1000);
     } catch (err) {
@@ -187,30 +205,31 @@ function playBeep(frequency: number, durationMs: number, gain: number): void {
 
 function playBeepAsync(frequency: number, durationMs: number, gain: number): Promise<void> {
     return new Promise((resolve) => {
-        try {
-            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-            if (!AudioCtx) { resolve(); return; }
-            const ctx = new AudioCtx();
-            const osc = ctx.createOscillator();
-            const gainNode = ctx.createGain();
+        const ctx = getAudioCtx();
+        if (!ctx) { resolve(); return; }
 
-            osc.connect(gainNode);
-            gainNode.connect(ctx.destination);
-
-            osc.type = "sine";
-            osc.frequency.setValueAtTime(frequency, ctx.currentTime);
-            gainNode.gain.setValueAtTime(gain, ctx.currentTime);
-
-            osc.onended = () => {
-                ctx.close().catch(() => {});
+        const fire = () => {
+            try {
+                const osc = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                osc.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+                gainNode.gain.setValueAtTime(gain, ctx.currentTime);
+                osc.onended = () => resolve();
+                osc.start();
+                osc.stop(ctx.currentTime + durationMs / 1000);
+            } catch (err) {
+                console.error("Audio beep failed:", err);
                 resolve();
-            };
+            }
+        };
 
-            osc.start();
-            osc.stop(ctx.currentTime + durationMs / 1000);
-        } catch (err) {
-            console.error("Audio beep failed:", err);
-            resolve();
+        if (ctx.state === "suspended") {
+            ctx.resume().then(fire).catch(() => { resolve(); });
+        } else {
+            fire();
         }
     });
 }
@@ -333,16 +352,25 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
         }, 1000);
     };
 
-    // --- Fire MEDIUM alert ---
+   // --- Fire MEDIUM alert (5 sequential beeps) ---
     const fireMediumAlert = (unseenUpdates: number) => {
-        playBeep(800, 200, 0.2);
-
         setActiveAlert((prev) => ({
             level: "medium",
             unseenUpdates: (prev?.unseenUpdates || 0) + unseenUpdates,
         }));
 
         document.title = `(${unseenUpdates} update) Admin Panel`;
+
+        // Play 5 sequential beeps using async chain
+        const seqId = ++alertSeqRef.current;
+        (async () => {
+            for (let i = 0; i < 5; i++) {
+                if (alertSeqRef.current !== seqId) return;
+                await playBeepAsync(800, 200, 0.2);
+                if (alertSeqRef.current !== seqId) return;
+                if (i < 4) await new Promise<void>(r => setTimeout(r, 250));
+            }
+        })();
     };
 
     // --- Close table ---
@@ -471,19 +499,7 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     ];
 
     return (
-        <div className="space-y-8">
-            {/* Stop Alert button (visible during 7-beep sequence) */}
-            {isAlerting && (
-                <button
-                    onClick={() => {
-                        alertSeqRef.current++;
-                        setIsAlerting(false);
-                    }}
-                    className="w-full bg-[#E24B4A] text-white font-bold py-3 px-6 rounded-xl text-base transition-all hover:bg-red-600 active:scale-[0.98]"
-                >
-                    Stop Alert
-                </button>
-            )}
+        <div className="space-y-8"> 
 
             {/* Notification Banner (STRONG alert only) */}
             {activeAlert?.level === "strong" && (
