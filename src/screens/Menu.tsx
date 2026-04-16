@@ -5,6 +5,49 @@ import type { Item } from "../utils/recommendations";
 import { getCachedRecommendation, getCachedRecSync } from "../utils/recommendationCache";
 import { useApp } from "../contexts/AppContext";
 
+// Playful upsell headline variants. Selected deterministically using
+// itemId % array.length so each menu item consistently shows the same
+// variant across all taps in all sessions.
+const UPSELL_HEADLINE_VARIANTS: string[] = [
+    "this pair is basically engaged",
+    "the combo that refuses to be apart",
+    "two items, one vibe",
+    "some pairings just get each other",
+    "these two, a little love story",
+    "a duo that belongs on a poster",
+    "certified dream team on the menu",
+    "they come as a package, honestly",
+    "a pairing the regulars keep on speed dial",
+    "legally, these should be sold together"
+];
+
+function getUpsellHeadline(primaryItemId: number, userName?: string | null): string {
+    const index = Math.abs(primaryItemId) % UPSELL_HEADLINE_VARIANTS.length;
+    const variant = UPSELL_HEADLINE_VARIANTS[index];
+    const trimmedName = (userName || "").trim();
+    if (trimmedName.length > 0) {
+        return `${trimmedName}, ${variant}`;
+    }
+    // No name: capitalize the first letter of the variant
+    return variant.charAt(0).toUpperCase() + variant.slice(1);
+}
+
+// Playful microcopy variants shown below the combined price. Deterministic
+// by itemId so the same item always shows the same line.
+const UPSELL_MICROCOPY_VARIANTS: string[] = [
+    "the crowd pleaser move",
+    "objectively the smart choice",
+    "tiny upgrade, big win",
+    "trust the menu on this one",
+    "this is how you cafe",
+    "a small yes, a big vibe",
+    "future you will thank you"
+];
+
+function getUpsellMicrocopy(primaryItemId: number): string {
+    const index = Math.abs(primaryItemId) % UPSELL_MICROCOPY_VARIANTS.length;
+    return UPSELL_MICROCOPY_VARIANTS[index];
+}
 interface MenuProps {
     onBack: () => void;
     onViewCart: () => void;
@@ -314,11 +357,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     const getPriceValue = (priceStr?: string) => parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
-
-    const activeName = state.userName || state.customerName;
-    const displayModalMessage = activeName
-        ? `${activeName}, most guests add this combo`
-        : `Most guests add this combo`;
 
     if (loading) {
         return (
@@ -647,7 +685,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                             {/* Combo Card Section */}
                             {upsellData && (
                                 <div className="border-t border-dashed border-gray-200 mt-4 pt-4">
-                                    <p className="text-[15px] font-semibold text-[#1A1A2E] mb-3">{displayModalMessage}</p>
+                                    <p className="text-[15px] font-semibold text-[#1A1A2E] mb-3">{getUpsellHeadline(selectedItem.id, state.userName || state.customerName)}</p>
                                     
                                     <span className="inline-block bg-[#FF6B35] text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full mb-2">
                                         REGULARS' PICK
@@ -657,10 +695,10 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                         className="rounded-xl p-4 animate-[subtlePulse_600ms_ease-out_1]"
                                         style={{ backgroundColor: 'rgba(255, 107, 53, 0.06)', border: '1px solid rgba(255, 107, 53, 0.15)' }}
                                     >
-                                        <div className="flex items-center justify-center mb-3">
-                                            <span className="text-sm font-medium text-dark text-center truncate">{selectedItem.name}</span>
+                                        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 mb-3">
+                                            <span className="text-sm font-medium text-dark text-center truncate whitespace-normal break-words">{selectedItem.name}</span>
                                             <span className="text-lg font-bold text-[#FF6B35] mx-2">+</span>
-                                            <span className="text-sm font-medium text-dark text-center truncate">{upsellData.item.name}</span>
+                                            <span className="text-sm font-medium text-dark text-center truncate whitespace-normal break-words">{upsellData.item.name}</span>
                                         </div>
 
                                         <div className="text-center">
@@ -671,7 +709,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                                 ₹{Math.round(getPriceValue(selectedItem.discountedPrice || selectedItem.price) + getPriceValue(upsellData.item.discountedPrice || upsellData.item.price))} for the pair
                                             </div>
                                             <div className="text-xs font-medium mt-1" style={{ color: 'rgba(26, 26, 46, 0.4)' }}>
-                                                Saves you the second trip
+                                                {getUpsellMicrocopy(selectedItem.id)}
                                             </div>
                                         </div>
                                     </div>
