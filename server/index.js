@@ -634,7 +634,9 @@ app.post("/api/rank-upsell", async (req, res) => {
                 "water", "beer", "wine", "spirits", "cooler", "squash",
                 "toddy", "kombucha", "milkshake", "frappe", "cold brew",
                 "hot drink", "cold drink", "nimbu", "jaljeera", "aam panna",
-                "sharbat", "thandai"
+                "sharbat", "thandai",
+                "brewmaster", "kaapi", "mocha", "cappuccino", "latte",
+                "espresso", "americano", "hot chocolate"
             ];
 
             // DESSERT: any category containing sweet/dessert-related keywords
@@ -721,12 +723,18 @@ app.post("/api/rank-upsell", async (req, res) => {
         // The paired item should feel like a small addition, not a bigger purchase.
         // Rule: paired item price should be at most 70% of primary item price,
         // with a minimum floor of ₹150 (so cheap primary items still get valid pairings).
-        const primaryPrice = Number(primaryItem.price) || 0;
+        const parsePrice = (val) => {
+            if (typeof val === "number") return val;
+            if (typeof val === "string") return Number(val.replace(/[^\d.]/g, "")) || 0;
+            return 0;
+        };
+        const primaryPrice = parsePrice(primaryItem.price);
+        console.log(`[rank-upsell] Primary price parsed: ${primaryPrice} (raw: ${JSON.stringify(primaryItem.price)})`);
         if (primaryPrice > 0) {
             const priceCap = Math.max(primaryPrice * 0.7, 150);
             const beforeCount = candidatePool.length;
             const pricedPool = candidatePool.filter(item => {
-                const itemPrice = Number(item.price) || 0;
+                const itemPrice = parsePrice(item.price);
                 return itemPrice > 0 && itemPrice <= priceCap;
             });
             console.log(`[rank-upsell] Price cap filter (≤ ₹${Math.round(priceCap)}): ${beforeCount} -> ${pricedPool.length} candidates`);
@@ -735,6 +743,8 @@ app.post("/api/rank-upsell", async (req, res) => {
             } else {
                 console.warn("[rank-upsell] No candidates under price cap, keeping full complementary pool");
             }
+        } else {
+            console.warn(`[rank-upsell] Skipping price cap: primaryPrice is 0 (raw value: ${JSON.stringify(primaryItem.price)})`);
         }
 
         // Shuffle the entire pool before slicing
