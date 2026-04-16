@@ -2,8 +2,7 @@ const { OpenAI } = require("openai");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Track the last recommended item globally to prevent repetitive suggestions
-let lastRecommendedItemName = null;
+// Track the last recommended item globally removed to prevent cross-customer bleeding
 
 /**
  * Uses GPT to select the best complementary upsell item.
@@ -20,13 +19,7 @@ async function generateUpsell(candidates, cartItems, fullMenu = []) {
     // - Not in cart (handled by index.js before calling this)
     // - Not in same category (handled by index.js before calling this)
     // - Available (handled by index.js before calling this)
-    // - AND NOT the last recommended item (to prevent repetitive defaults like Vanilla Ice Cream)
     let filteredCandidates = candidates;
-    if (lastRecommendedItemName) {
-        filteredCandidates = candidates.filter(
-            c => c.name.toLowerCase() !== lastRecommendedItemName.toLowerCase()
-        );
-    }
 
     // If we blocked the last one and now we have nothing, fall back to the original candidates
     if (filteredCandidates.length === 0 && candidates.length > 0) {
@@ -53,52 +46,66 @@ async function generateUpsell(candidates, cartItems, fullMenu = []) {
 
         // 4. GPT Prompt Construction
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
+            model: "gpt-4o-mini",
             max_tokens: 150,
-            temperature: 0.7,
+            temperature: 0.4,
             messages: [
                 {
                     role: "system",
-                    content: `You are a restaurant upsell engine. Your job is to pick the ONE item from the allowed list that best COMPLETES the customer's meal.
+                    content: `You are an expert restaurant menu pairing assistant for an Indian cafe. Your job is to pick the ONE item from the allowed list that most naturally completes the customer's order.
 
-Rules:
-- A main dish (burger, wrap, breakfast, fish & chips) should be paired with a DRINK or DESSERT. Never pair main + main.
-- A beverage (coffee, juice, smoothie, lemon drink) should be paired with a FOOD ITEM or DESSERT. Never pair drink + drink.
-- A dessert (brownie, muffin, ice cream) should be paired with a BEVERAGE. Never pair dessert + dessert.
-- Think about what a real customer would naturally order together.
-- Pick the item that makes the overall meal feel complete.
+CORE PAIRING PRINCIPLES (in priority order):
 
-Good pairings:
-- Vegetable Burger + Cold Coffee (main + drink)
-- Cold Coffee + Croissant (drink + snack)
-- Fish & Chips + Fresh Lime Soda (main + drink)
-- Pancake + Cappuccino (breakfast + hot drink)
-- Chocolate Brownie + Cappuccino (dessert + hot drink)
+1. FLAVOR CONTRAST over flavor overlap.
+   - Sweet drink pairs with savory food (latte + croissant, not latte + brownie)
+   - Savory food pairs with dessert or drink (burger + cold coffee, not burger + fries)
+   - Hot item pairs with cold item when possible (hot coffee + cold cheesecake is fine; hot coffee + hot tea is wrong)
 
-Bad pairings (NEVER do this):
-- Burger + English Breakfast (main + main)
-- Cold Coffee + Pineapple Juice (drink + drink)
-- Ice Cream + Chocolate Brownie (dessert + dessert)
+2. NO FLAVOR DOUBLE-STACKING. Never pair two items with overlapping primary flavors:
+   - Chocolate + Chocolate (brownie + chocolate shake = BAD)
+   - Coffee + Coffee (latte + cold brew = BAD)
+   - Sweet + Sweet (mocha + ice cream = BAD)
+   - Fried + Fried (fries + pakoda = BAD)
 
-Output exact JSON:
+3. MEAL COMPLETENESS. Pair items that a real guest in Bangalore would order together in one sitting:
+   - Morning: coffee + breakfast item (croissant, sandwich, eggs)
+   - Afternoon: meal + refreshing drink (biryani + lassi, burger + cold coffee)
+   - Evening: snack + light drink, or drink + dessert
+
+4. AVOID REDUNDANCY. If the primary item is already indulgent or rich (mocha, milkshake, heavy dessert), pair with something lighter and contrasting (a savory snack, a plain pastry, a refreshing item).
+
+EXAMPLES OF GOOD PAIRINGS:
+- Cappuccino + Croissant (hot drink + buttery pastry — classic, contrasting)
+- Veg Burger + Cold Coffee (savory + sweet drink)
+- Fish and Chips + Fresh Lime Soda (rich + refreshing)
+- Chocolate Brownie + Espresso (sweet dessert + strong bitter drink)
+- Masala Dosa + Filter Coffee (savory breakfast + hot beverage)
+
+EXAMPLES OF BAD PAIRINGS (never do these):
+- Peppermint Mocha + Chocolate Brownie (chocolate + chocolate, sweet + sweet)
+- Cold Coffee + Iced Mocha (coffee + coffee)
+- Vanilla Ice Cream + Cheesecake (dessert + dessert)
+- Masala Fries + Aloo Tikki (fried + fried)
+- Green Smoothie + Fresh Juice (drink + drink, both healthy)
+
+OUTPUT FORMAT (return EXACTLY this JSON, no other text):
 {
-  "recommended_item": "<exact item name from allowed list>",
-  "reason": "<one sentence why this completes the meal>",
-  "upsell_copy": "<short friendly nudge, max 10 words>"
+  "recommended_item": "<exact item name from the allowed list>",
+  "reason": "<one sentence explaining the pairing, focus on contrast>",
+  "upsell_copy": "<short, warm nudge under 10 words>"
 }`
                 },
                 {
                     role: "user",
-                    content: `Primary item ordered:
-${primaryItem.name || 'Unknown'}
+                    content: `Primary item ordered: ${primaryItem.name || 'Unknown'}
+Primary item category: ${primaryItem.category || 'Unknown'}
 
-Allowed recommendation items (choose exactly one):
+Allowed recommendation items (pick exactly ONE):
 ${candidateList}
 
-Choose the ONE item that best complements the primary item.
-Focus on taste pairing, meal timing, and balance.
+Apply the CORE PAIRING PRINCIPLES. Prioritize flavor CONTRAST. Never double-stack the same flavor family as the primary item.
 
-Return JSON:`
+Return the JSON now:`
                 }
             ],
             response_format: { type: "json_object" }
@@ -131,9 +138,6 @@ Return JSON:`
             if (matchedItem) {
                 console.log(`[aiUpsellEngine] GPT successfully picked: ${matchedItem.name}`);
                 
-                // Track last recommended item
-                lastRecommendedItemName = matchedItem.name;
-                
                 return { item: matchedItem, reason, copy };
             } else {
                  console.warn(`[aiUpsellEngine] GPT recommended missing item name "${recommendedName}". Falling back.`);
@@ -143,8 +147,6 @@ Return JSON:`
         }
 
         // Fallback if not matched or missing fields
-        // Update track even on fallback to ensure variety
-        lastRecommendedItemName = fallbackItem.name;
         return fallbackResult;
 
     } catch (err) {
@@ -153,8 +155,6 @@ Return JSON:`
         } else {
             console.warn("[aiUpsellEngine] GPT error:", err.message);
         }
-        
-        lastRecommendedItemName = fallbackItem.name;
         return fallbackResult;
     }
 }

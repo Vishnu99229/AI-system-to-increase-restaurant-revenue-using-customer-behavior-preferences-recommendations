@@ -694,7 +694,7 @@ app.post("/api/rank-upsell", async (req, res) => {
 
         const BUCKET_COMPLEMENTS = {
             "FOOD": ["DRINK", "DESSERT"],
-            "DRINK": ["FOOD", "DESSERT"],
+            "DRINK": ["FOOD"],
             "DESSERT": ["DRINK"]
         };
 
@@ -715,6 +715,26 @@ app.post("/api/rank-upsell", async (req, res) => {
             }
         } else {
             console.warn(`[rank-upsell] No bucket match for "${primaryBucket}", keeping full pool`);
+        }
+
+        // --- Price Cap Filter ---
+        // The paired item should feel like a small addition, not a bigger purchase.
+        // Rule: paired item price should be at most 70% of primary item price,
+        // with a minimum floor of ₹150 (so cheap primary items still get valid pairings).
+        const primaryPrice = Number(primaryItem.price) || 0;
+        if (primaryPrice > 0) {
+            const priceCap = Math.max(primaryPrice * 0.7, 150);
+            const beforeCount = candidatePool.length;
+            const pricedPool = candidatePool.filter(item => {
+                const itemPrice = Number(item.price) || 0;
+                return itemPrice > 0 && itemPrice <= priceCap;
+            });
+            console.log(`[rank-upsell] Price cap filter (≤ ₹${Math.round(priceCap)}): ${beforeCount} -> ${pricedPool.length} candidates`);
+            if (pricedPool.length > 0) {
+                candidatePool = pricedPool;
+            } else {
+                console.warn("[rank-upsell] No candidates under price cap, keeping full complementary pool");
+            }
         }
 
         // Shuffle the entire pool before slicing
