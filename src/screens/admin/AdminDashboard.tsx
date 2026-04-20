@@ -660,6 +660,7 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
 function MenuView({ items, onUpdate, slug }: { items: any[]; onUpdate: () => void; slug: string }) {
     const [isAdding, setIsAdding] = useState(false);
     const [editItem, setEditItem] = useState<any>(null);
+    const [isSaving, setIsSaving] = useState(false);
 
     const handleDelete = async (id: number) => {
         if (confirm("Are you sure?")) {
@@ -713,18 +714,26 @@ function MenuView({ items, onUpdate, slug }: { items: any[]; onUpdate: () => voi
                         <h3 className="text-xl font-bold mb-6">{isAdding ? "Add Item" : "Edit Item"}</h3>
                         <form onSubmit={async (e) => {
                             e.preventDefault();
-                            const formData = new FormData(e.currentTarget);
-                            const data = Object.fromEntries(formData.entries());
-                            data.price = (data.price as string).replace('₹', '');
-                            
-                            if (isAdding) {
-                                await addMenuItem(slug, data);
-                            } else {
-                                await updateMenuItem(slug, editItem.id, { ...editItem, ...data });
+                            if (isSaving) return;
+                            setIsSaving(true);
+                            try {
+                                const formData = new FormData(e.currentTarget);
+                                const data = Object.fromEntries(formData.entries());
+                                data.price = (data.price as string).replace('₹', '');
+
+                                if (isAdding) {
+                                    await addMenuItem(slug, data);
+                                } else {
+                                    await updateMenuItem(slug, editItem.id, { ...editItem, ...data });
+                                }
+                                setIsAdding(false);
+                                setEditItem(null);
+                                onUpdate();
+                            } catch (err) {
+                                console.error("Failed to save menu item:", err);
+                            } finally {
+                                setIsSaving(false);
                             }
-                            setIsAdding(false);
-                            setEditItem(null);
-                            onUpdate();
                         }} className="space-y-4">
                             <input name="name" defaultValue={editItem?.name} placeholder="Item Name" className="w-full p-2 border rounded" required />
                             <input name="price" defaultValue={editItem?.price} placeholder="Price (e.g. 150)" className="w-full p-2 border rounded" required />
@@ -732,8 +741,21 @@ function MenuView({ items, onUpdate, slug }: { items: any[]; onUpdate: () => voi
                             <input name="image_url" defaultValue={editItem?.image_url} placeholder="Image URL" className="w-full p-2 border rounded" />
                             <textarea name="description" defaultValue={editItem?.description} placeholder="Description" className="w-full p-2 border rounded" />
                             <div className="flex gap-4 pt-4">
-                                <button type="button" onClick={() => { setIsAdding(false); setEditItem(null); }} className="flex-1 py-2 font-bold text-gray-500">Cancel</button>
-                                <button type="submit" className="flex-1 py-2 font-bold bg-orange-600 text-white rounded-lg">Save</button>
+                                <button
+                                    type="button"
+                                    disabled={isSaving}
+                                    onClick={() => { setIsAdding(false); setEditItem(null); }}
+                                    className="flex-1 py-2 font-bold text-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSaving}
+                                    className="flex-1 py-2 font-bold bg-orange-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isSaving ? "Saving..." : "Save"}
+                                </button>
                             </div>
                         </form>
                     </div>
