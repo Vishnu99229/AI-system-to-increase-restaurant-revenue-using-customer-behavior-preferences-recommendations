@@ -1,6 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchAdminAnalytics, fetchAdminOrders, updateOrderStatus, fetchMenu, addMenuItem, updateMenuItem, deleteMenuItem } from "../../utils/api";
 
+function handleAuthError(response: Response, logout: () => void): boolean {
+    if (response.status === 401) {
+        alert("Your session has expired. Please log in again.");
+        logout();
+        return true;
+    }
+    return false;
+}
+
 interface AdminDashboardProps {
     slug: string;
     onLogout: () => void;
@@ -87,7 +96,7 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                 ) : (
                     <>
                         {activeTab === "analytics" && <AnalyticsView data={analytics} slug={slug} />}
-                        {activeTab === "menu" && <MenuView items={menuItems} onUpdate={() => loadData()} slug={slug} />}
+                        {activeTab === "menu" && <MenuView items={menuItems} onUpdate={() => loadData()} slug={slug} onLogout={onLogout} />}
                     </>
                 )}
             </main>
@@ -657,15 +666,26 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     );
 }
 
-function MenuView({ items, onUpdate, slug }: { items: any[]; onUpdate: () => void; slug: string }) {
+function MenuView({ items, onUpdate, slug, onLogout }: { items: any[]; onUpdate: () => void; slug: string; onLogout: () => void }) {
     const [isAdding, setIsAdding] = useState(false);
     const [editItem, setEditItem] = useState<any>(null);
     const [isSaving, setIsSaving] = useState(false);
 
     const handleDelete = async (id: number) => {
         if (confirm("Are you sure?")) {
-            await deleteMenuItem(slug, id);
-            onUpdate();
+            try {
+                const response = await deleteMenuItem(slug, id);
+                if (handleAuthError(response, onLogout)) return;
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    alert(`Failed to delete item: ${errorData.error || response.statusText}`);
+                    return;
+                }
+                onUpdate();
+            } catch (err) {
+                console.error("Delete failed:", err);
+                alert("Failed to delete item. Please check your connection.");
+            }
         }
     };
 
@@ -722,15 +742,29 @@ function MenuView({ items, onUpdate, slug }: { items: any[]; onUpdate: () => voi
                                 data.price = (data.price as string).replace('₹', '');
 
                                 if (isAdding) {
-                                    await addMenuItem(slug, data);
+                                    const response = await addMenuItem(slug, data);
+                                    if (handleAuthError(response, onLogout)) return;
+                                    if (!response.ok) {
+                                        const errorData = await response.json().catch(() => ({}));
+                                        alert(`Failed to add item: ${errorData.error || response.statusText}`);
+                                        return;
+                                    }
+                                    setIsAdding(false);
+                                    onUpdate();
                                 } else {
-                                    await updateMenuItem(slug, editItem.id, { ...editItem, ...data });
+                                    const response = await updateMenuItem(slug, editItem.id, { ...editItem, ...data });
+                                    if (handleAuthError(response, onLogout)) return;
+                                    if (!response.ok) {
+                                        const errorData = await response.json().catch(() => ({}));
+                                        alert(`Failed to update item: ${errorData.error || response.statusText}`);
+                                        return;
+                                    }
+                                    setEditItem(null);
+                                    onUpdate();
                                 }
-                                setIsAdding(false);
-                                setEditItem(null);
-                                onUpdate();
                             } catch (err) {
                                 console.error("Failed to save menu item:", err);
+                                alert("Failed to save menu item. Please check your connection.");
                             } finally {
                                 setIsSaving(false);
                             }

@@ -350,6 +350,12 @@ app.post("/api/admin/:slug/menu", authenticateAdmin, async (req, res) => {
 app.put("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
     const { name, description, price, category, image_url, is_available } = req.body;
     try {
+        console.log(`[admin] Updating menu item ${req.params.id} for slug ${req.params.slug}:`, {
+            name: req.body.name,
+            price: req.body.price,
+            category: req.body.category,
+            restaurant_id_in_body: req.body.restaurant_id || "NOT SENT (correct)"
+        });
         const result = await pool.query(
             `UPDATE menus SET name=$1, description=$2, price=$3, category=$4, image_url=$5, is_available=$6 
              WHERE id=$7 AND restaurant_id=$8 RETURNING *`,
@@ -363,6 +369,7 @@ app.put("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
 
 app.delete("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
     try {
+        console.log(`[admin] Deleting menu item ${req.params.id} for slug ${req.params.slug}`);
         await pool.query("DELETE FROM menus WHERE id=$1 AND restaurant_id=$2", [req.params.id, req.admin.restaurant_id]);
         res.json({ success: true });
     } catch (err) {

@@ -163,7 +163,7 @@ export async function addMenuItem(slug: string, item: any) {
         },
         body: JSON.stringify(item)
     });
-    return res.json();
+    return res;
 }
 
 export async function updateMenuItem(slug: string, id: number, item: any) {
@@ -175,7 +175,7 @@ export async function updateMenuItem(slug: string, id: number, item: any) {
         },
         body: JSON.stringify(item)
     });
-    return res.json();
+    return res;
 }
 
 export async function deleteMenuItem(slug: string, id: number) {
@@ -183,5 +183,5 @@ export async function deleteMenuItem(slug: string, id: number) {
         method: "DELETE",
         headers: getAuthHeader()
     });
-    return res.ok;
+    return res;
 }
