@@ -348,7 +348,8 @@ app.post("/api/admin/:slug/menu", authenticateAdmin, async (req, res) => {
 });
 
 app.put("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
-    const { name, description, price, category, image_url, is_available } = req.body;
+    const { name, description, price, category, image_url } = req.body;
+    const is_available = req.body.is_available !== undefined ? req.body.is_available : true;
     try {
         console.log(`[admin] Updating menu item ${req.params.id} for slug ${req.params.slug}:`, {
             name: req.body.name,
