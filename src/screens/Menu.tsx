@@ -122,14 +122,14 @@ function ChatGlyph({ showClose }: { showClose: boolean }) {
         <span className="relative block w-6 h-6">
             <svg
                 className={`absolute inset-0 w-6 h-6 transition-opacity duration-200 ${showClose ? "opacity-0" : "opacity-100"}`}
+                width="26"
+                height="26"
                 viewBox="0 0 24 24"
                 fill="none"
+                xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
             >
-                <path d="M5 6.5C5 5.12 6.12 4 7.5 4H16.5C17.88 4 19 5.12 19 6.5V13.5C19 14.88 17.88 16 16.5 16H10.8L7 19.5V16H7.5C6.12 16 5 14.88 5 13.5V6.5Z" stroke="white" strokeWidth="1.8" strokeLinejoin="round" />
-                <circle cx="9.2" cy="10" r="1.1" fill="white" />
-                <circle cx="12" cy="10" r="1.1" fill="white" />
-                <circle cx="14.8" cy="10" r="1.1" fill="white" />
+                <path d="M12 2C6.48 2 2 5.92 2 10.67c0 2.73 1.53 5.15 3.92 6.73L4.5 21.5l4.58-2.15c.95.25 1.93.38 2.92.38 5.52 0 10-3.92 10-8.73S17.52 2 12 2z" fill="white" />
             </svg>
             <svg
                 className={`absolute inset-0 w-6 h-6 transition-opacity duration-200 ${showClose ? "opacity-100" : "opacity-0"}`}
@@ -178,7 +178,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [showAddedToast, setShowAddedToast] = useState(false);
     const [showChatBubble, setShowChatBubble] = useState(false);
     const [bubbleBreathing, setBubbleBreathing] = useState(false);
-    const [showTooltip, setShowTooltip] = useState(false);
     const [sheetOpen, setSheetOpen] = useState(false);
     const [sheetClosing, setSheetClosing] = useState(false);
     const [showSheetContent, setShowSheetContent] = useState(false);
@@ -191,7 +190,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [keyboardInset, setKeyboardInset] = useState(0);
 
     const hasTrackedCurrentModal = useRef(false);
-    const tooltipDismissedRef = useRef(false);
     const threadRef = useRef<HTMLDivElement>(null);
 
     const [upsellData, setUpsellData] = useState<{ item: Item; tag: string } | null>(null);
@@ -417,28 +415,11 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             setBubbleBreathing(true);
         }, 3000);
         const stopPulseTimer = window.setTimeout(() => setBubbleBreathing(false), 9000);
-        const tooltipShowTimer = window.setTimeout(() => {
-            if (!tooltipDismissedRef.current) {
-                setShowTooltip(true);
-            }
-        }, 8000);
-        const tooltipHideTimer = window.setTimeout(() => setShowTooltip(false), 14000);
 
         return () => {
             window.clearTimeout(showTimer);
             window.clearTimeout(stopPulseTimer);
-            window.clearTimeout(tooltipShowTimer);
-            window.clearTimeout(tooltipHideTimer);
         };
-    }, []);
-
-    useEffect(() => {
-        const onScroll = () => {
-            tooltipDismissedRef.current = true;
-            setShowTooltip(false);
-        };
-        window.addEventListener("scroll", onScroll, { passive: true });
-        return () => window.removeEventListener("scroll", onScroll);
     }, []);
 
     useEffect(() => {
@@ -513,8 +494,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     const openChatSheet = () => {
-        tooltipDismissedRef.current = true;
-        setShowTooltip(false);
         setSheetClosing(false);
         setSheetOpen(true);
     };
@@ -976,16 +955,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                     </span>
                 </button>
 
-                {showTooltip && !sheetOpen && (
-                    <div
-                        className="fixed z-[1000] chat-tooltip-in chat-tooltip-out"
-                        style={{ right: "20px", bottom: state.cartItems.length > 0 ? "172px" : "88px" }}
-                    >
-                        <div className="chat-tooltip-pill">Not sure where to start? Ask me 👋</div>
-                        <div className="chat-tooltip-caret" />
-                    </div>
-                )}
-
                 {sheetOpen && (
                     <>
                         <button
@@ -1012,7 +981,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                         </div>
                                         <div>
                                             <div className="text-base font-semibold text-[#1A1A2E] leading-tight">Orlena</div>
-                                            <div className="text-xs text-[#888888] leading-tight mt-0.5">AI Menu Assistant</div>
+                                            <div className="text-xs text-[#888888] leading-tight mt-0.5">Powered by GPT</div>
                                         </div>
                                     </div>
                                     <button
@@ -1124,14 +1093,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         50% { box-shadow: 0 8px 28px rgba(255,107,53,0.42); }
                         100% { box-shadow: 0 8px 20px rgba(255,107,53,0.28); }
                     }
-                    @keyframes chatTooltipIn {
-                        0% { opacity: 0; transform: translateY(6px); }
-                        100% { opacity: 1; transform: translateY(0); }
-                    }
-                    @keyframes chatTooltipOut {
-                        0%, 95% { opacity: 1; }
-                        100% { opacity: 0; }
-                    }
                     @keyframes chatOverlayIn {
                         from { opacity: 0; }
                         to { opacity: 1; }
@@ -1167,29 +1128,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         animation:
                             chatBubbleIn 500ms cubic-bezier(0.34, 1.56, 0.64, 1) both,
                             chatBubblePulse 2s ease-in-out 3;
-                    }
-                    .chat-tooltip-in {
-                        animation: chatTooltipIn 400ms ease-out both;
-                    }
-                    .chat-tooltip-out {
-                        animation: chatTooltipOut 6s ease-in forwards;
-                    }
-                    .chat-tooltip-pill {
-                        background: #1A1A2E;
-                        color: #fff;
-                        font-size: 13px;
-                        border-radius: 20px;
-                        padding: 8px 16px;
-                        line-height: 1.2;
-                        white-space: nowrap;
-                    }
-                    .chat-tooltip-caret {
-                        width: 0;
-                        height: 0;
-                        margin: 0 auto;
-                        border-left: 6px solid transparent;
-                        border-right: 6px solid transparent;
-                        border-top: 6px solid #1A1A2E;
                     }
                     .chat-overlay-in {
                         animation: chatOverlayIn 250ms ease-out both;
