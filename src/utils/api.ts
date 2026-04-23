@@ -185,3 +185,31 @@ export async function deleteMenuItem(slug: string, id: number) {
     });
     return res;
 }
+
+export type MenuChatMessage = {
+    role: "user" | "assistant";
+    content: string;
+};
+
+export async function chatWithMenuAssistant(
+    slug: string,
+    message: string,
+    history: MenuChatMessage[]
+): Promise<{ reply: string }> {
+    const res = await fetch(`${API_BASE}/api/menu/${slug}/chat`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            message,
+            history
+        })
+    });
+
+    if (!res.ok) {
+        throw new Error("Chat request failed");
+    }
+
+    return res.json();
+}

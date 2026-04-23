@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchMenu, trackUpsellShown } from "../utils/api";
+import { chatWithMenuAssistant } from "../utils/api";
 import { rankCandidatesAI } from "../utils/recommendations";
 import type { Item } from "../utils/recommendations";
+import type { MenuChatMessage } from "../utils/api";
 import { getCachedRecommendation, getCachedRecSync } from "../utils/recommendationCache";
 import { useApp } from "../contexts/AppContext";
 
@@ -64,6 +66,8 @@ const TAB_GROUPS: Record<string, string[]> = {
 
 const TAB_NAMES = Object.keys(TAB_GROUPS);
 const DEFAULT_TAB = "Drinks";
+const CHAT_OPENING_TEXT = "Hey! I know this menu well. Ask me anything -- what's good, what's popular, what goes well together.";
+const QUICK_REPLIES: string[] = ["What's popular? 🔥", "Something cold 🧊", "Surprise me ✨"];
 
 // --- Diet-dot color by tags ---
 function getDietDot(tags?: string[]): { color: string; label: string } | null {
@@ -105,6 +109,40 @@ function MenuItemImage({ src, alt, className = "" }: { src?: string; alt: string
     );
 }
 
+function getCafeInitial(slug?: string): string {
+    const fallback = "O";
+    if (!slug) return fallback;
+    const clean = slug.replace(/-/g, " ").trim();
+    if (!clean) return fallback;
+    return clean.charAt(0).toUpperCase();
+}
+
+function ChatGlyph({ showClose }: { showClose: boolean }) {
+    return (
+        <span className="relative block w-6 h-6">
+            <svg
+                className={`absolute inset-0 w-6 h-6 transition-opacity duration-200 ${showClose ? "opacity-0" : "opacity-100"}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+            >
+                <path d="M5 6.5C5 5.12 6.12 4 7.5 4H16.5C17.88 4 19 5.12 19 6.5V13.5C19 14.88 17.88 16 16.5 16H10.8L7 19.5V16H7.5C6.12 16 5 14.88 5 13.5V6.5Z" stroke="white" strokeWidth="1.8" strokeLinejoin="round" />
+                <circle cx="9.2" cy="10" r="1.1" fill="white" />
+                <circle cx="12" cy="10" r="1.1" fill="white" />
+                <circle cx="14.8" cy="10" r="1.1" fill="white" />
+            </svg>
+            <svg
+                className={`absolute inset-0 w-6 h-6 transition-opacity duration-200 ${showClose ? "opacity-100" : "opacity-0"}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+            >
+                <path d="M6 6L18 18M18 6L6 18" stroke="white" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+        </span>
+    );
+}
+
 export default function Menu({ onBack, onViewCart }: MenuProps) {
     const { state, dispatch } = useApp();
 
@@ -138,8 +176,23 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [selectedItem, setSelectedItem] = useState<Item | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [showAddedToast, setShowAddedToast] = useState(false);
+    const [showChatBubble, setShowChatBubble] = useState(false);
+    const [bubbleBreathing, setBubbleBreathing] = useState(false);
+    const [showTooltip, setShowTooltip] = useState(false);
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const [sheetClosing, setSheetClosing] = useState(false);
+    const [showSheetContent, setShowSheetContent] = useState(false);
+    const [showInitialTyping, setShowInitialTyping] = useState(false);
+    const [showQuickReplies, setShowQuickReplies] = useState(false);
+    const [messages, setMessages] = useState<MenuChatMessage[]>([]);
+    const [chatInput, setChatInput] = useState("");
+    const [chatLoading, setChatLoading] = useState(false);
+    const [activeChip, setActiveChip] = useState<string | null>(null);
+    const [keyboardInset, setKeyboardInset] = useState(0);
 
     const hasTrackedCurrentModal = useRef(false);
+    const tooltipDismissedRef = useRef(false);
+    const threadRef = useRef<HTMLDivElement>(null);
 
     const [upsellData, setUpsellData] = useState<{ item: Item; tag: string } | null>(null);
 
@@ -357,6 +410,153 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     const getPriceValue = (priceStr?: string) => parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
+
+    useEffect(() => {
+        const showTimer = window.setTimeout(() => {
+            setShowChatBubble(true);
+            setBubbleBreathing(true);
+        }, 3000);
+        const stopPulseTimer = window.setTimeout(() => setBubbleBreathing(false), 9000);
+        const tooltipShowTimer = window.setTimeout(() => {
+            if (!tooltipDismissedRef.current) {
+                setShowTooltip(true);
+            }
+        }, 8000);
+        const tooltipHideTimer = window.setTimeout(() => setShowTooltip(false), 14000);
+
+        return () => {
+            window.clearTimeout(showTimer);
+            window.clearTimeout(stopPulseTimer);
+            window.clearTimeout(tooltipShowTimer);
+            window.clearTimeout(tooltipHideTimer);
+        };
+    }, []);
+
+    useEffect(() => {
+        const onScroll = () => {
+            tooltipDismissedRef.current = true;
+            setShowTooltip(false);
+        };
+        window.addEventListener("scroll", onScroll, { passive: true });
+        return () => window.removeEventListener("scroll", onScroll);
+    }, []);
+
+    useEffect(() => {
+        if (!threadRef.current) return;
+        threadRef.current.scrollTo({
+            top: threadRef.current.scrollHeight,
+            behavior: "smooth"
+        });
+    }, [messages, chatLoading, showInitialTyping]);
+
+    useEffect(() => {
+        if (!sheetOpen) {
+            setKeyboardInset(0);
+            return;
+        }
+
+        const viewport = window.visualViewport;
+        if (!viewport) return;
+
+        const updateInset = () => {
+            const inset = Math.max(0, Math.round(window.innerHeight - viewport.height));
+            setKeyboardInset(inset);
+        };
+
+        updateInset();
+        viewport.addEventListener("resize", updateInset);
+        viewport.addEventListener("scroll", updateInset);
+        return () => {
+            viewport.removeEventListener("resize", updateInset);
+            viewport.removeEventListener("scroll", updateInset);
+        };
+    }, [sheetOpen]);
+
+    useEffect(() => {
+        if (!sheetOpen) return;
+
+        setShowSheetContent(false);
+        setShowInitialTyping(false);
+        setShowQuickReplies(false);
+        setMessages([]);
+        setChatInput("");
+        setChatLoading(false);
+
+        const avatarTimer = window.setTimeout(() => setShowSheetContent(true), 400);
+        const typingTimer = window.setTimeout(() => setShowInitialTyping(true), 600);
+        const greetingTimer = window.setTimeout(() => {
+            setShowInitialTyping(false);
+            setMessages([{ role: "assistant", content: CHAT_OPENING_TEXT }]);
+        }, 1400);
+        const chipTimer = window.setTimeout(() => setShowQuickReplies(true), 1800);
+
+        return () => {
+            window.clearTimeout(avatarTimer);
+            window.clearTimeout(typingTimer);
+            window.clearTimeout(greetingTimer);
+            window.clearTimeout(chipTimer);
+        };
+    }, [sheetOpen]);
+
+    const closeChatSheet = () => {
+        setSheetClosing(true);
+        window.setTimeout(() => {
+            setSheetOpen(false);
+            setSheetClosing(false);
+            setShowQuickReplies(false);
+            setShowInitialTyping(false);
+            setMessages([]);
+            setChatInput("");
+            setChatLoading(false);
+            setActiveChip(null);
+        }, 280);
+    };
+
+    const openChatSheet = () => {
+        tooltipDismissedRef.current = true;
+        setShowTooltip(false);
+        setSheetClosing(false);
+        setSheetOpen(true);
+    };
+
+    const sendChatMessage = async (rawText: string) => {
+        const text = rawText.trim();
+        if (!text || chatLoading || !state.restaurantId) return;
+
+        const baseHistory = messages;
+        const userMessage: MenuChatMessage = { role: "user", content: text };
+        const nextMessages = [...baseHistory, userMessage];
+        setMessages(nextMessages);
+        setChatInput("");
+        setChatLoading(true);
+        setShowQuickReplies(false);
+
+        try {
+            const data = await chatWithMenuAssistant(state.restaurantId, text, nextMessages);
+            const assistantMessage: MenuChatMessage = {
+                role: "assistant",
+                content: data.reply
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+        } catch (err) {
+            console.error("Menu chat failed:", err);
+            setMessages((prev) => [
+                ...prev,
+                { role: "assistant", content: "Hmm, something went wrong. Try asking again?" }
+            ]);
+        } finally {
+            setChatLoading(false);
+        }
+    };
+
+    const onChipTap = async (chip: string) => {
+        if (chatLoading) return;
+        setActiveChip(chip);
+        window.setTimeout(() => setActiveChip(null), 150);
+        window.setTimeout(() => {
+            sendChatMessage(chip);
+        }, 150);
+    };
 
     if (loading) {
         return (
@@ -760,6 +960,273 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         </div>
                     </div>
                 )}
+
+                <button
+                    type="button"
+                    aria-label={sheetOpen ? "Close menu chat" : "Open menu chat"}
+                    onClick={() => (sheetOpen ? closeChatSheet() : openChatSheet())}
+                    className={`fixed right-5 z-[1000] w-14 h-14 rounded-full shadow-lg transition-transform ${showChatBubble ? (bubbleBreathing ? "chat-bubble-breathe" : "chat-bubble-enter") : "scale-0 opacity-0"}`}
+                    style={{
+                        bottom: state.cartItems.length > 0 ? "108px" : "24px",
+                        backgroundColor: "#FF6B35"
+                    }}
+                >
+                    <span className="inline-flex items-center justify-center w-full h-full">
+                        <ChatGlyph showClose={sheetOpen} />
+                    </span>
+                </button>
+
+                {showTooltip && !sheetOpen && (
+                    <div
+                        className="fixed z-[1000] chat-tooltip-in chat-tooltip-out"
+                        style={{ right: "20px", bottom: state.cartItems.length > 0 ? "172px" : "88px" }}
+                    >
+                        <div className="chat-tooltip-pill">Not sure where to start? Ask me 👋</div>
+                        <div className="chat-tooltip-caret" />
+                    </div>
+                )}
+
+                {sheetOpen && (
+                    <>
+                        <button
+                            type="button"
+                            aria-label="Close menu chat"
+                            onClick={closeChatSheet}
+                            className={`fixed inset-0 z-[1001] bg-black/35 ${sheetClosing ? "chat-overlay-out" : "chat-overlay-in"}`}
+                        />
+                        <div
+                            className={`fixed left-0 right-0 z-[1002] bg-[#FAFAFA] rounded-t-[24px] shadow-[0_-8px_40px_rgba(0,0,0,0.12)] ${sheetClosing ? "chat-sheet-out" : "chat-sheet-in"}`}
+                            style={{
+                                height: "70vh",
+                                bottom: `${Math.round((state.cartItems.length > 0 ? 88 : 0) + keyboardInset)}px`
+                            }}
+                        >
+                            <div className="w-full h-full flex flex-col">
+                                <div className="flex justify-center pt-3">
+                                    <div className="w-10 h-1 rounded-sm bg-[#D1D1D1]" />
+                                </div>
+                                <div className="px-5 py-3.5 border-b border-[#EEEEEE] flex items-center justify-between min-h-[64px]">
+                                    <div className={`flex items-center gap-2.5 transition-opacity duration-300 ${showSheetContent ? "opacity-100" : "opacity-0"}`}>
+                                        <div className="w-7 h-7 rounded-full bg-[#FF6B35] text-white text-sm font-semibold flex items-center justify-center">
+                                            {getCafeInitial(state.restaurantId)}
+                                        </div>
+                                        <div>
+                                            <div className="text-base font-semibold text-[#1A1A2E] leading-tight">Orlena</div>
+                                            <div className="text-xs text-[#888888] leading-tight mt-0.5">AI Menu Assistant</div>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        aria-label="Close chat panel"
+                                        onClick={closeChatSheet}
+                                        className="w-11 h-11 flex items-center justify-center text-[#999999]"
+                                    >
+                                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                                            <path d="M6 6L18 18M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                <div ref={threadRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-2 space-y-3 chat-thread-scroll">
+                                    {messages.map((msg, idx) => (
+                                        <div key={`${msg.role}-${idx}`} className={`w-full flex ${msg.role === "assistant" ? "justify-start" : "justify-end"} chat-message-in`}>
+                                            <div
+                                                className={`max-w-[82%] text-sm leading-[1.5] break-words ${
+                                                    msg.role === "assistant"
+                                                        ? "bg-white border border-[#EEEEEE] text-[#1A1A2E] rounded-[18px_18px_18px_6px] px-4 py-3"
+                                                        : "bg-[#FF6B35] text-white rounded-[18px_18px_6px_18px] px-4 py-3"
+                                                }`}
+                                            >
+                                                {msg.content}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {(showInitialTyping || chatLoading) && (
+                                        <div className="w-full flex justify-start chat-message-in">
+                                            <div className="bg-white border border-[#EEEEEE] rounded-[18px_18px_18px_6px] px-5 py-3">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="chat-dot" />
+                                                    <span className="chat-dot" />
+                                                    <span className="chat-dot" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {showQuickReplies && messages.length === 1 && messages[0]?.role === "assistant" && (
+                                    <div className="px-4 py-2 overflow-x-auto chat-thread-scroll">
+                                        <div className="flex gap-2 w-max">
+                                            {QUICK_REPLIES.map((chip, idx) => (
+                                                <button
+                                                    key={chip}
+                                                    type="button"
+                                                    onClick={() => onChipTap(chip)}
+                                                    className={`px-[18px] py-2 rounded-full text-[13px] font-medium whitespace-nowrap border-[1.5px] transition-all ${
+                                                        activeChip === chip ? "bg-[#FF6B35] text-white border-[#FF6B35]" : "bg-white text-[#FF6B35] border-[#FF6B35]"
+                                                    } chat-chip-in`}
+                                                    style={{ animationDelay: `${Math.round(idx * 80)}ms`, minHeight: "36px" }}
+                                                >
+                                                    {chip}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <form
+                                    onSubmit={(e) => {
+                                        e.preventDefault();
+                                        sendChatMessage(chatInput);
+                                    }}
+                                    className="px-4 py-3 bg-white border-t border-[#EEEEEE]"
+                                    style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}
+                                >
+                                    <div className="flex items-center">
+                                        <input
+                                            value={chatInput}
+                                            onChange={(e) => setChatInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    sendChatMessage(chatInput);
+                                                }
+                                            }}
+                                            placeholder="Ask about the menu..."
+                                            className="flex-1 rounded-[24px] bg-[#F5F5F5] border-[1.5px] border-transparent focus:border-[#FF6B35] focus:outline-none text-sm px-5 py-3 transition-colors duration-200"
+                                            disabled={chatLoading}
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={!chatInput.trim() || chatLoading}
+                                            className={`ml-2.5 w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 ${chatInput.trim() && !chatLoading ? "bg-[#FF6B35] active:scale-90" : "bg-[#E0E0E0] cursor-not-allowed"}`}
+                                            aria-label="Send message"
+                                        >
+                                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+                                                <path d="M12 19V6M12 6L7 11M12 6L17 11" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </>
+                )}
+
+                <style>{`
+                    @keyframes chatBubbleIn {
+                        0% { transform: scale(0); opacity: 0; }
+                        70% { transform: scale(1.15); opacity: 1; }
+                        100% { transform: scale(1); opacity: 1; }
+                    }
+                    @keyframes chatBubblePulse {
+                        0% { box-shadow: 0 8px 20px rgba(255,107,53,0.28); }
+                        50% { box-shadow: 0 8px 28px rgba(255,107,53,0.42); }
+                        100% { box-shadow: 0 8px 20px rgba(255,107,53,0.28); }
+                    }
+                    @keyframes chatTooltipIn {
+                        0% { opacity: 0; transform: translateY(6px); }
+                        100% { opacity: 1; transform: translateY(0); }
+                    }
+                    @keyframes chatTooltipOut {
+                        0%, 95% { opacity: 1; }
+                        100% { opacity: 0; }
+                    }
+                    @keyframes chatOverlayIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes chatOverlayOut {
+                        from { opacity: 1; }
+                        to { opacity: 0; }
+                    }
+                    @keyframes chatSheetIn {
+                        from { transform: translateY(100%); }
+                        to { transform: translateY(0); }
+                    }
+                    @keyframes chatSheetOut {
+                        from { transform: translateY(0); }
+                        to { transform: translateY(100%); }
+                    }
+                    @keyframes chatMessageIn {
+                        from { opacity: 0; transform: translateY(8px); }
+                        to { opacity: 1; transform: translateY(0); }
+                    }
+                    @keyframes chatDotWave {
+                        0%, 100% { transform: scale(1); opacity: 0.8; }
+                        50% { transform: scale(1.4); opacity: 1; }
+                    }
+                    @keyframes chatChipIn {
+                        from { opacity: 0; transform: translateX(20px); }
+                        to { opacity: 1; transform: translateX(0); }
+                    }
+                    .chat-bubble-enter {
+                        animation: chatBubbleIn 500ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+                    }
+                    .chat-bubble-breathe {
+                        animation:
+                            chatBubbleIn 500ms cubic-bezier(0.34, 1.56, 0.64, 1) both,
+                            chatBubblePulse 2s ease-in-out 3;
+                    }
+                    .chat-tooltip-in {
+                        animation: chatTooltipIn 400ms ease-out both;
+                    }
+                    .chat-tooltip-out {
+                        animation: chatTooltipOut 6s ease-in forwards;
+                    }
+                    .chat-tooltip-pill {
+                        background: #1A1A2E;
+                        color: #fff;
+                        font-size: 13px;
+                        border-radius: 20px;
+                        padding: 8px 16px;
+                        line-height: 1.2;
+                        white-space: nowrap;
+                    }
+                    .chat-tooltip-caret {
+                        width: 0;
+                        height: 0;
+                        margin: 0 auto;
+                        border-left: 6px solid transparent;
+                        border-right: 6px solid transparent;
+                        border-top: 6px solid #1A1A2E;
+                    }
+                    .chat-overlay-in {
+                        animation: chatOverlayIn 250ms ease-out both;
+                    }
+                    .chat-overlay-out {
+                        animation: chatOverlayOut 250ms ease-out both;
+                    }
+                    .chat-sheet-in {
+                        animation: chatSheetIn 350ms cubic-bezier(0.32, 0.72, 0, 1) both;
+                    }
+                    .chat-sheet-out {
+                        animation: chatSheetOut 280ms cubic-bezier(0.32, 0.72, 0, 1) both;
+                    }
+                    .chat-message-in {
+                        animation: chatMessageIn 300ms ease-out both;
+                    }
+                    .chat-dot {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 999px;
+                        background: #BBBBBB;
+                        display: block;
+                        animation: chatDotWave 900ms ease-in-out infinite;
+                    }
+                    .chat-dot:nth-child(2) { animation-delay: 150ms; }
+                    .chat-dot:nth-child(3) { animation-delay: 300ms; }
+                    .chat-chip-in {
+                        animation: chatChipIn 300ms ease-out both;
+                    }
+                    .chat-thread-scroll {
+                        scrollbar-width: none;
+                        -webkit-overflow-scrolling: touch;
+                    }
+                    .chat-thread-scroll::-webkit-scrollbar {
+                        display: none;
+                    }
+                `}</style>
             </div>
         </div>
     );

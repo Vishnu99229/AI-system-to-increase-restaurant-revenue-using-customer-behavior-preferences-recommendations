@@ -480,6 +480,96 @@ app.get("/api/:slug/menu", async (req, res) => {
     }
 });
 
+app.post("/api/menu/:slug/chat", async (req, res) => {
+    try {
+        const slug = req.params.slug;
+        const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+        const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+
+        if (!message) {
+            return res.status(400).json({ error: "Message is required" });
+        }
+
+        const restaurantResult = await pool.query(
+            "SELECT id, name FROM restaurants WHERE domain = $1 OR slug = $1 LIMIT 1",
+            [slug]
+        );
+
+        if (restaurantResult.rows.length === 0) {
+            return res.status(404).json({ error: "Restaurant not found" });
+        }
+
+        const restaurant = restaurantResult.rows[0];
+        const menuResult = await pool.query(
+            "SELECT id, name, description, price, category, sub_category, tags, image_url, is_available FROM menus WHERE restaurant_id = $1 ORDER BY category, name",
+            [restaurant.id]
+        );
+
+        const safeHistory = rawHistory
+            .filter((entry) => entry && (entry.role === "user" || entry.role === "assistant") && typeof entry.content === "string")
+            .map((entry) => ({
+                role: entry.role,
+                content: entry.content.trim().slice(0, 500)
+            }))
+            .filter((entry) => entry.content.length > 0)
+            .slice(-12);
+
+        const personality = slug === "cafe-mizuru"
+            ? "You are calm, minimal, and poetic. Inspired by Japanese simplicity. You say less and mean more. You never oversell. You describe food the way a haiku describes weather."
+            : "You are warm, friendly, and enthusiastic. You love good food and it shows. You talk like someone who has tried everything on the menu and has a genuine favourite.";
+
+        const systemPrompt = `You are the AI menu assistant for ${restaurant.name}.
+
+You know every dish on this menu. You speak like a close friend who happens to know the kitchen inside out. You are warm, opinionated, and specific.
+
+THE FULL MENU:
+${JSON.stringify(menuResult.rows)}
+
+RULES:
+1. Every response must be 1-2 sentences maximum. Never more.
+2. Never list more than 2 items in a single response. Pick the best ones, not all of them.
+3. When the customer shows interest in a dish or orders something, suggest exactly ONE complementary item as a natural aside. Example: "That's a great pick. The hojicha latte goes surprisingly well with it." Do NOT frame it as an upsell. Frame it as insider knowledge.
+4. Sound like a knowledgeable friend, never like a chatbot. No bullet points. No numbered lists. No "Here are some options:". Just talk.
+5. Never say "I'm an AI", "as an AI assistant", or anything that breaks the illusion. You are the menu assistant.
+6. Never invent dishes that are not on the menu.
+7. If asked about allergens or dietary info, answer based only on what the menu data contains. If unsure, say "Let me check with the kitchen -- best to ask your server about that one."
+8. If asked something unrelated to food/menu/cafe, respond warmly but redirect: "Ha, I wish I knew. But I do know what you should eat -- what are you in the mood for?"
+9. Use the customer's language. If they text casually, be casual. If they ask formally, match it.
+
+PERSONALITY:
+${personality}
+
+Remember: you are the reason this customer discovers something they love. Be memorable.`;
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            max_tokens: 120,
+            temperature: 0.8,
+            messages: [
+                {
+                    role: "system",
+                    content: systemPrompt
+                },
+                ...safeHistory,
+                {
+                    role: "user",
+                    content: message
+                }
+            ]
+        });
+
+        const reply = completion.choices?.[0]?.message?.content?.trim();
+        if (!reply) {
+            return res.status(502).json({ error: "Empty model response" });
+        }
+
+        return res.json({ reply });
+    } catch (err) {
+        console.error("[menu-chat] Error:", err.message);
+        return res.status(500).json({ error: "Chat failed" });
+    }
+});
+
 // --- POST /api/upsell-event ---
 app.post("/api/upsell-event", async (req, res) => {
     try {
