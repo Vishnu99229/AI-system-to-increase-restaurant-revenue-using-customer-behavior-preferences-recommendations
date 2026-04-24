@@ -111,6 +111,36 @@ const pool = new Pool({
                 last_verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
+        await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS ingredients (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cafe_slug VARCHAR(255) NOT NULL,
+                name VARCHAR(255) NOT NULL,
+                category VARCHAR(100),
+                unit VARCHAR(50) NOT NULL,
+                cost_per_unit NUMERIC(10,2) NOT NULL,
+                shelf_life_hours INTEGER,
+                storage_type VARCHAR(50),
+                supplier_name VARCHAR(255),
+                min_order_quantity NUMERIC(10,2),
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (cafe_slug, name)
+            )
+        `);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS recipe_ingredients (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                menu_item_id INTEGER NOT NULL REFERENCES menus(id) ON DELETE CASCADE,
+                ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+                quantity_used NUMERIC(10,2) NOT NULL,
+                unit VARCHAR(50) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (menu_item_id, ingredient_id)
+            )
+        `);
         console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events, customers)");
 
         // --- Local Database Seeding ---
@@ -377,6 +407,280 @@ app.delete("/api/admin/:slug/menu/:id", authenticateAdmin, async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: "Failed to delete menu item" });
+    }
+});
+
+// --- Admin Ingredients ---
+app.get("/api/admin/:slug/ingredients", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        const result = await pool.query(
+            `SELECT * FROM ingredients
+             WHERE cafe_slug = $1 AND is_active = true
+             ORDER BY name ASC`,
+            [slug]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch ingredients" });
+    }
+});
+
+app.post("/api/admin/:slug/ingredients", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const {
+        name,
+        category,
+        unit,
+        cost_per_unit,
+        shelf_life_hours,
+        storage_type,
+        supplier_name,
+        min_order_quantity
+    } = req.body;
+    try {
+        const result = await pool.query(
+            `INSERT INTO ingredients (
+                cafe_slug, name, category, unit, cost_per_unit, shelf_life_hours, storage_type, supplier_name, min_order_quantity
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+            [
+                slug,
+                name,
+                category || null,
+                unit,
+                cost_per_unit,
+                shelf_life_hours || null,
+                storage_type || null,
+                supplier_name || null,
+                min_order_quantity || null
+            ]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        if (err.code === "23505") {
+            return res.status(409).json({ error: "Ingredient with this name already exists" });
+        }
+        res.status(500).json({ error: "Failed to create ingredient" });
+    }
+});
+
+app.put("/api/admin/:slug/ingredients/:id", authenticateAdmin, async (req, res) => {
+    const { slug, id } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const {
+        name,
+        category,
+        unit,
+        cost_per_unit,
+        shelf_life_hours,
+        storage_type,
+        supplier_name,
+        min_order_quantity,
+        is_active
+    } = req.body;
+    try {
+        const result = await pool.query(
+            `UPDATE ingredients SET
+                name = $1,
+                category = $2,
+                unit = $3,
+                cost_per_unit = $4,
+                shelf_life_hours = $5,
+                storage_type = $6,
+                supplier_name = $7,
+                min_order_quantity = $8,
+                is_active = COALESCE($9, is_active),
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $10 AND cafe_slug = $11
+             RETURNING *`,
+            [
+                name,
+                category || null,
+                unit,
+                cost_per_unit,
+                shelf_life_hours || null,
+                storage_type || null,
+                supplier_name || null,
+                min_order_quantity || null,
+                is_active,
+                id,
+                slug
+            ]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Ingredient not found" });
+        res.json(result.rows[0]);
+    } catch (err) {
+        if (err.code === "23505") {
+            return res.status(409).json({ error: "Ingredient with this name already exists" });
+        }
+        res.status(500).json({ error: "Failed to update ingredient" });
+    }
+});
+
+app.delete("/api/admin/:slug/ingredients/:id", authenticateAdmin, async (req, res) => {
+    const { slug, id } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        await pool.query(
+            `UPDATE ingredients SET is_active = false, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND cafe_slug = $2`,
+            [id, slug]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to delete ingredient" });
+    }
+});
+
+// --- Admin Recipe Mapping ---
+app.get("/api/admin/:slug/menu-items/:menuItemId/recipe", authenticateAdmin, async (req, res) => {
+    const { slug, menuItemId } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        const menuItemResult = await pool.query(
+            "SELECT id, name, price FROM menus WHERE id = $1 AND restaurant_id = $2",
+            [menuItemId, req.admin.restaurant_id]
+        );
+        if (menuItemResult.rows.length === 0) return res.status(404).json({ error: "Menu item not found" });
+
+        const recipeResult = await pool.query(
+            `SELECT
+                ri.id,
+                ri.menu_item_id,
+                ri.ingredient_id,
+                ri.quantity_used,
+                ri.unit,
+                ri.created_at,
+                i.name AS ingredient_name,
+                i.category AS ingredient_category,
+                i.cost_per_unit
+             FROM recipe_ingredients ri
+             JOIN ingredients i ON i.id = ri.ingredient_id
+             WHERE ri.menu_item_id = $1 AND i.cafe_slug = $2 AND i.is_active = true
+             ORDER BY i.name ASC`,
+            [menuItemId, slug]
+        );
+        res.json({
+            menu_item: menuItemResult.rows[0],
+            recipe: recipeResult.rows
+        });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch recipe" });
+    }
+});
+
+app.post("/api/admin/:slug/menu-items/:menuItemId/recipe", authenticateAdmin, async (req, res) => {
+    const { slug, menuItemId } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const { ingredient_id, quantity_used, unit } = req.body;
+    try {
+        const ingredientResult = await pool.query(
+            "SELECT id FROM ingredients WHERE id = $1 AND cafe_slug = $2 AND is_active = true",
+            [ingredient_id, slug]
+        );
+        if (ingredientResult.rows.length === 0) return res.status(404).json({ error: "Ingredient not found" });
+
+        const menuItemResult = await pool.query(
+            "SELECT id FROM menus WHERE id = $1 AND restaurant_id = $2",
+            [menuItemId, req.admin.restaurant_id]
+        );
+        if (menuItemResult.rows.length === 0) return res.status(404).json({ error: "Menu item not found" });
+
+        const result = await pool.query(
+            `INSERT INTO recipe_ingredients (menu_item_id, ingredient_id, quantity_used, unit)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [menuItemId, ingredient_id, quantity_used, unit]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        if (err.code === "23505") {
+            return res.status(409).json({ error: "Ingredient already mapped to this menu item" });
+        }
+        res.status(500).json({ error: "Failed to add recipe ingredient" });
+    }
+});
+
+app.put("/api/admin/:slug/recipe-ingredients/:id", authenticateAdmin, async (req, res) => {
+    const { slug, id } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const { quantity_used, unit } = req.body;
+    try {
+        const result = await pool.query(
+            `UPDATE recipe_ingredients ri
+             SET quantity_used = $1, unit = $2
+             FROM ingredients i, menus m
+             WHERE ri.id = $3
+               AND i.id = ri.ingredient_id
+               AND i.cafe_slug = $4
+               AND m.id = ri.menu_item_id
+               AND m.restaurant_id = $5
+             RETURNING ri.*`,
+            [quantity_used, unit, id, slug, req.admin.restaurant_id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Recipe ingredient not found" });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to update recipe ingredient" });
+    }
+});
+
+app.delete("/api/admin/:slug/recipe-ingredients/:id", authenticateAdmin, async (req, res) => {
+    const { slug, id } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        await pool.query(
+            `DELETE FROM recipe_ingredients ri
+             USING ingredients i, menus m
+             WHERE ri.id = $1
+               AND i.id = ri.ingredient_id
+               AND i.cafe_slug = $2
+               AND m.id = ri.menu_item_id
+               AND m.restaurant_id = $3`,
+            [id, slug, req.admin.restaurant_id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to remove recipe ingredient" });
+    }
+});
+
+app.get("/api/admin/:slug/menu-items/food-cost", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        const result = await pool.query(
+            `SELECT
+                m.id,
+                m.name,
+                m.price,
+                COALESCE(SUM(i.cost_per_unit * ri.quantity_used), 0) AS food_cost
+             FROM menus m
+             LEFT JOIN recipe_ingredients ri ON ri.menu_item_id = m.id
+             LEFT JOIN ingredients i ON i.id = ri.ingredient_id AND i.is_active = true AND i.cafe_slug = $1
+             WHERE m.restaurant_id = $2
+             GROUP BY m.id, m.name, m.price
+             ORDER BY m.name ASC`,
+            [slug, req.admin.restaurant_id]
+        );
+
+        const rows = result.rows.map((row) => {
+            const sellingPrice = Number(row.price) || 0;
+            const foodCost = Number(row.food_cost) || 0;
+            const foodCostPercentage = sellingPrice > 0 ? (foodCost / sellingPrice) * 100 : 0;
+            return {
+                id: row.id,
+                name: row.name,
+                selling_price: Math.round(sellingPrice),
+                food_cost: Math.round(foodCost),
+                food_cost_percentage: Math.round(foodCostPercentage)
+            };
+        });
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch food cost" });
     }
 });
 

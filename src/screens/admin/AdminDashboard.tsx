@@ -1,5 +1,24 @@
 import { useState, useEffect, useRef } from "react";
-import { fetchAdminAnalytics, fetchAdminOrders, updateOrderStatus, fetchMenu, addMenuItem, updateMenuItem, deleteMenuItem } from "../../utils/api";
+import {
+    fetchAdminAnalytics,
+    fetchAdminOrders,
+    updateOrderStatus,
+    fetchMenu,
+    addMenuItem,
+    updateMenuItem,
+    deleteMenuItem,
+    fetchIngredients,
+    createIngredient,
+    updateIngredient,
+    deleteIngredient,
+    fetchAdminMenuItems,
+    fetchRecipeForMenuItem,
+    addIngredientToRecipe,
+    updateRecipeIngredient,
+    deleteRecipeIngredient,
+    fetchMenuItemFoodCosts,
+    type Ingredient
+} from "../../utils/api";
 
 function handleAuthError(response: Response, logout: () => void): boolean {
     if (response.status === 401) {
@@ -16,7 +35,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) {
-    const [activeTab, setActiveTab] = useState<"analytics" | "menu">("analytics");
+    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes">("analytics");
     const [analytics, setAnalytics] = useState<any>(null);
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -36,6 +55,8 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
             } else if (activeTab === "menu") {
                 const data = await fetchMenu(slug);
                 setMenuItems(data);
+            } else {
+                setLoading(false);
             }
         } catch (err) {
             console.error("Failed to load data", err);
@@ -68,6 +89,8 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
             <nav className="bg-white border-b border-gray-200 px-6 flex gap-8">
                 <TabButton active={activeTab === "analytics"} onClick={() => setActiveTab("analytics")}>Analytics</TabButton>
                 <TabButton active={activeTab === "menu"} onClick={() => setActiveTab("menu")}>Menu Manager</TabButton>
+                <TabButton active={activeTab === "ingredients"} onClick={() => setActiveTab("ingredients")}>Ingredients</TabButton>
+                <TabButton active={activeTab === "recipes"} onClick={() => setActiveTab("recipes")}>Recipe Mapping</TabButton>
             </nav>
 
             {/* Sound unlock banner */}
@@ -88,7 +111,7 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
             )}
 
             {/* Content Area */}
-            <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+            <main className="flex-1 p-4 max-w-md mx-auto w-full">
                 {loading ? (
                     <div className="h-full flex items-center justify-center">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
@@ -97,6 +120,8 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                     <>
                         {activeTab === "analytics" && <AnalyticsView data={analytics} slug={slug} />}
                         {activeTab === "menu" && <MenuView items={menuItems} onUpdate={() => loadData()} slug={slug} onLogout={onLogout} />}
+                        {activeTab === "ingredients" && <IngredientsView slug={slug} onLogout={onLogout} />}
+                        {activeTab === "recipes" && <RecipeMappingView slug={slug} onLogout={onLogout} />}
                     </>
                 )}
             </main>
@@ -792,6 +817,390 @@ function MenuView({ items, onUpdate, slug, onLogout }: { items: any[]; onUpdate:
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+const DEFAULT_INGREDIENT_FORM = {
+    name: "",
+    category: "",
+    unit: "",
+    cost_per_unit: "",
+    shelf_life_hours: "",
+    storage_type: "",
+    supplier_name: "",
+    min_order_quantity: ""
+};
+
+function IngredientsView({ slug, onLogout }: { slug: string; onLogout: () => void }) {
+    const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+    const [search, setSearch] = useState("");
+    const [categoryFilter, setCategoryFilter] = useState("all");
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editIngredient, setEditIngredient] = useState<Ingredient | null>(null);
+    const [form, setForm] = useState(DEFAULT_INGREDIENT_FORM);
+    const [saving, setSaving] = useState(false);
+
+    const loadIngredients = async () => {
+        try {
+            const rows = await fetchIngredients(slug);
+            setIngredients(rows);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    useEffect(() => {
+        loadIngredients();
+    }, [slug]);
+
+    const openCreate = () => {
+        setEditIngredient(null);
+        setForm(DEFAULT_INGREDIENT_FORM);
+        setIsModalOpen(true);
+    };
+
+    const openEdit = (ingredient: Ingredient) => {
+        setEditIngredient(ingredient);
+        setForm({
+            name: ingredient.name || "",
+            category: ingredient.category || "",
+            unit: ingredient.unit || "",
+            cost_per_unit: String(ingredient.cost_per_unit || ""),
+            shelf_life_hours: ingredient.shelf_life_hours ? String(ingredient.shelf_life_hours) : "",
+            storage_type: ingredient.storage_type || "",
+            supplier_name: ingredient.supplier_name || "",
+            min_order_quantity: ingredient.min_order_quantity ? String(ingredient.min_order_quantity) : ""
+        });
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (saving) return;
+        setSaving(true);
+        const payload = {
+            name: form.name.trim(),
+            category: form.category.trim() || null,
+            unit: form.unit.trim(),
+            cost_per_unit: Number(form.cost_per_unit),
+            shelf_life_hours: form.shelf_life_hours ? Number(form.shelf_life_hours) : null,
+            storage_type: form.storage_type.trim() || null,
+            supplier_name: form.supplier_name.trim() || null,
+            min_order_quantity: form.min_order_quantity ? Number(form.min_order_quantity) : null
+        };
+
+        try {
+            const response = editIngredient
+                ? await updateIngredient(slug, editIngredient.id, payload)
+                : await createIngredient(slug, payload);
+            if (handleAuthError(response, onLogout)) return;
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                alert(data.error || "Failed to save ingredient");
+                return;
+            }
+            setIsModalOpen(false);
+            setEditIngredient(null);
+            await loadIngredients();
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!confirm("Delete this ingredient?")) return;
+        const response = await deleteIngredient(slug, id);
+        if (handleAuthError(response, onLogout)) return;
+        if (!response.ok) {
+            alert("Failed to delete ingredient");
+            return;
+        }
+        await loadIngredients();
+    };
+
+    const categories = Array.from(new Set(ingredients.map((i) => i.category).filter(Boolean))) as string[];
+    const filtered = ingredients.filter((ingredient) => {
+        const searchHit = ingredient.name.toLowerCase().includes(search.toLowerCase());
+        const categoryHit = categoryFilter === "all" || ingredient.category === categoryFilter;
+        return searchHit && categoryHit;
+    });
+
+    return (
+        <div className="space-y-4 max-w-md mx-auto">
+            <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-gray-800">Ingredients Manager</h3>
+                <button onClick={openCreate} className="bg-orange-600 text-white text-sm font-bold px-3 py-2 rounded-lg">Add Ingredient</button>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+                <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search ingredient"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                >
+                    <option value="all">All Categories</option>
+                    {categories.map((category) => (
+                        <option key={category} value={category}>{category}</option>
+                    ))}
+                </select>
+            </div>
+
+            <div className="space-y-3">
+                {filtered.map((ingredient) => (
+                    <div key={ingredient.id} className="bg-white border border-gray-200 rounded-xl p-3">
+                        <div className="flex items-start justify-between gap-2">
+                            <div>
+                                <p className="font-bold text-gray-800">{ingredient.name}</p>
+                                <p className="text-xs text-gray-500">
+                                    {ingredient.category || "Uncategorized"} | {ingredient.unit} | INR {Math.round(Number(ingredient.cost_per_unit) || 0)}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Shelf: {ingredient.shelf_life_hours ?? "-"} hrs | Storage: {ingredient.storage_type || "-"} | Supplier: {ingredient.supplier_name || "-"}
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => openEdit(ingredient)} className="text-xs font-bold text-blue-600">Edit</button>
+                                <button onClick={() => handleDelete(ingredient.id)} className="text-xs font-bold text-red-600">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+                {filtered.length === 0 && <p className="text-sm text-gray-500 text-center py-6">No ingredients found.</p>}
+            </div>
+
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl p-4 w-full max-w-md">
+                        <h4 className="font-bold text-gray-800 mb-3">{editIngredient ? "Edit Ingredient" : "Add Ingredient"}</h4>
+                        <form onSubmit={handleSave} className="space-y-2">
+                            <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Category" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input required value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="Unit" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input required type="number" step="0.01" value={form.cost_per_unit} onChange={(e) => setForm({ ...form, cost_per_unit: e.target.value })} placeholder="Cost Per Unit (INR)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input type="number" value={form.shelf_life_hours} onChange={(e) => setForm({ ...form, shelf_life_hours: e.target.value })} placeholder="Shelf Life (hours)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input value={form.storage_type} onChange={(e) => setForm({ ...form, storage_type: e.target.value })} placeholder="Storage Type" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input value={form.supplier_name} onChange={(e) => setForm({ ...form, supplier_name: e.target.value })} placeholder="Supplier Name" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input type="number" step="0.01" value={form.min_order_quantity} onChange={(e) => setForm({ ...form, min_order_quantity: e.target.value })} placeholder="Minimum Order Quantity" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={() => setIsModalOpen(false)} className="px-3 py-2 text-sm">Cancel</button>
+                                <button type="submit" disabled={saving} className="bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-bold">{saving ? "Saving..." : "Save"}</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function RecipeMappingView({ slug, onLogout }: { slug: string; onLogout: () => void }) {
+    const [menuItems, setMenuItems] = useState<Array<{ id: number; name: string; price: string | number }>>([]);
+    const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+    const [selectedMenuItemId, setSelectedMenuItemId] = useState<number | null>(null);
+    const [recipeRows, setRecipeRows] = useState<any[]>([]);
+    const [foodCosts, setFoodCosts] = useState<Array<{ id: number; name: string; selling_price: number; food_cost: number; food_cost_percentage: number }>>([]);
+    const [ingredientSearch, setIngredientSearch] = useState("");
+    const [selectedIngredientId, setSelectedIngredientId] = useState("");
+    const [quantityUsed, setQuantityUsed] = useState("");
+    const [usageUnit, setUsageUnit] = useState("");
+    const [editingRowId, setEditingRowId] = useState<string | null>(null);
+
+    const loadBase = async () => {
+        const [menu, ingredientRows, costs] = await Promise.all([
+            fetchAdminMenuItems(slug),
+            fetchIngredients(slug),
+            fetchMenuItemFoodCosts(slug)
+        ]);
+        setMenuItems(menu);
+        setIngredients(ingredientRows);
+        setFoodCosts(costs);
+    };
+
+    const loadRecipe = async (menuItemId: number) => {
+        const data = await fetchRecipeForMenuItem(slug, menuItemId);
+        setRecipeRows(data.recipe || []);
+    };
+
+    useEffect(() => {
+        loadBase().catch(console.error);
+    }, [slug]);
+
+    useEffect(() => {
+        if (selectedMenuItemId) {
+            loadRecipe(selectedMenuItemId).catch(console.error);
+        } else {
+            setRecipeRows([]);
+        }
+    }, [selectedMenuItemId, slug]);
+
+    const handleAdd = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedMenuItemId || !selectedIngredientId || !quantityUsed || !usageUnit) return;
+        const response = await addIngredientToRecipe(slug, selectedMenuItemId, {
+            ingredient_id: selectedIngredientId,
+            quantity_used: Number(quantityUsed),
+            unit: usageUnit
+        });
+        if (handleAuthError(response, onLogout)) return;
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            alert(data.error || "Failed to add ingredient to recipe");
+            return;
+        }
+        setSelectedIngredientId("");
+        setQuantityUsed("");
+        setUsageUnit("");
+        await loadRecipe(selectedMenuItemId);
+        setFoodCosts(await fetchMenuItemFoodCosts(slug));
+    };
+
+    const handleUpdate = async (rowId: string, quantity: number, unit: string) => {
+        const response = await updateRecipeIngredient(slug, rowId, { quantity_used: quantity, unit });
+        if (handleAuthError(response, onLogout)) return;
+        if (!response.ok) {
+            alert("Failed to update mapping");
+            return;
+        }
+        if (selectedMenuItemId) await loadRecipe(selectedMenuItemId);
+        setFoodCosts(await fetchMenuItemFoodCosts(slug));
+        setEditingRowId(null);
+    };
+
+    const handleDelete = async (rowId: string) => {
+        if (!confirm("Remove this ingredient from recipe?")) return;
+        const response = await deleteRecipeIngredient(slug, rowId);
+        if (handleAuthError(response, onLogout)) return;
+        if (!response.ok) {
+            alert("Failed to remove ingredient");
+            return;
+        }
+        if (selectedMenuItemId) await loadRecipe(selectedMenuItemId);
+        setFoodCosts(await fetchMenuItemFoodCosts(slug));
+    };
+
+    const selectedFoodCost = foodCosts.find((row) => row.id === selectedMenuItemId);
+    const selectedMenuItem = menuItems.find((item) => item.id === selectedMenuItemId);
+    const filteredIngredients = ingredients.filter((ingredient) => ingredient.name.toLowerCase().includes(ingredientSearch.toLowerCase()));
+
+    return (
+        <div className="space-y-4 max-w-md mx-auto">
+            <h3 className="text-lg font-bold text-gray-800">Recipe Mapping</h3>
+            <select
+                value={selectedMenuItemId ?? ""}
+                onChange={(e) => setSelectedMenuItemId(e.target.value ? Number(e.target.value) : null)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+                <option value="">Select Menu Item</option>
+                {menuItems.map((item) => (
+                    <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+            </select>
+
+            {selectedMenuItemId && (
+                <>
+                    <form onSubmit={handleAdd} className="bg-white border border-gray-200 rounded-xl p-3 space-y-2">
+                        <p className="font-bold text-sm text-gray-700">Add Ingredient to Recipe</p>
+                        <input
+                            value={ingredientSearch}
+                            onChange={(e) => setIngredientSearch(e.target.value)}
+                            placeholder="Search ingredient"
+                            className="w-full border rounded-lg px-3 py-2 text-sm"
+                        />
+                        <select value={selectedIngredientId} onChange={(e) => setSelectedIngredientId(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" required>
+                            <option value="">Select ingredient</option>
+                            {filteredIngredients.map((ingredient) => (
+                                <option key={ingredient.id} value={ingredient.id}>{ingredient.name}</option>
+                            ))}
+                        </select>
+                        <div className="grid grid-cols-2 gap-2">
+                            <input required type="number" step="0.01" value={quantityUsed} onChange={(e) => setQuantityUsed(e.target.value)} placeholder="Quantity" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input required value={usageUnit} onChange={(e) => setUsageUnit(e.target.value)} placeholder="Unit" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                        </div>
+                        <button type="submit" className="w-full bg-orange-600 text-white text-sm font-bold py-2 rounded-lg">Add</button>
+                    </form>
+
+                    <div className="space-y-2">
+                        {recipeRows.map((row) => (
+                            <RecipeRow
+                                key={row.id}
+                                row={row}
+                                isEditing={editingRowId === row.id}
+                                onEdit={() => setEditingRowId(row.id)}
+                                onCancel={() => setEditingRowId(null)}
+                                onSave={handleUpdate}
+                                onDelete={handleDelete}
+                            />
+                        ))}
+                        {recipeRows.length === 0 && <p className="text-sm text-gray-500 text-center py-6">No ingredients mapped yet.</p>}
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-xl p-3">
+                        <p className="text-sm text-gray-600">{selectedMenuItem?.name || "Menu item"}</p>
+                        <p className="text-sm font-medium text-gray-700">Selling Price: INR {Math.round(Number(selectedFoodCost?.selling_price || selectedMenuItem?.price || 0))}</p>
+                        <p className="text-sm font-medium text-gray-700">Total Ingredient Cost: INR {Math.round(Number(selectedFoodCost?.food_cost || 0))}</p>
+                        <p className={`text-sm font-bold ${
+                            (selectedFoodCost?.food_cost_percentage || 0) < 30
+                                ? "text-green-600"
+                                : (selectedFoodCost?.food_cost_percentage || 0) <= 40
+                                    ? "text-orange-600"
+                                    : "text-red-600"
+                        }`}>
+                            Food Cost %: {Math.round(Number(selectedFoodCost?.food_cost_percentage || 0))}%
+                        </p>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+function RecipeRow({
+    row,
+    isEditing,
+    onEdit,
+    onCancel,
+    onSave,
+    onDelete
+}: {
+    row: any;
+    isEditing: boolean;
+    onEdit: () => void;
+    onCancel: () => void;
+    onSave: (rowId: string, quantity: number, unit: string) => Promise<void>;
+    onDelete: (rowId: string) => Promise<void>;
+}) {
+    const [quantity, setQuantity] = useState(String(row.quantity_used));
+    const [unit, setUnit] = useState(row.unit);
+
+    return (
+        <div className="bg-white border border-gray-200 rounded-xl p-3">
+            <p className="font-bold text-sm text-gray-800">{row.ingredient_name}</p>
+            {!isEditing ? (
+                <div className="flex items-center justify-between mt-1">
+                    <p className="text-xs text-gray-500">Qty: {Math.round(Number(row.quantity_used) * 100) / 100} {row.unit}</p>
+                    <div className="flex gap-2">
+                        <button onClick={onEdit} className="text-xs font-bold text-blue-600">Edit</button>
+                        <button onClick={() => onDelete(row.id)} className="text-xs font-bold text-red-600">Remove</button>
+                    </div>
+                </div>
+            ) : (
+                <div className="mt-2 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                        <input type="number" step="0.01" value={quantity} onChange={(e) => setQuantity(e.target.value)} className="w-full border rounded-lg px-2 py-1 text-sm" />
+                        <input value={unit} onChange={(e) => setUnit(e.target.value)} className="w-full border rounded-lg px-2 py-1 text-sm" />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <button onClick={onCancel} className="text-xs">Cancel</button>
+                        <button onClick={() => onSave(row.id, Number(quantity), unit)} className="text-xs font-bold text-white bg-orange-600 rounded px-2 py-1">Save</button>
                     </div>
                 </div>
             )}

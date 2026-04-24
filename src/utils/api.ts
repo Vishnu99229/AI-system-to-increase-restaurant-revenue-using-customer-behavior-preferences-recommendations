@@ -186,6 +186,133 @@ export async function deleteMenuItem(slug: string, id: number) {
     return res;
 }
 
+export interface Ingredient {
+    id: string;
+    cafe_slug: string;
+    name: string;
+    category: string | null;
+    unit: string;
+    cost_per_unit: string | number;
+    shelf_life_hours: number | null;
+    storage_type: string | null;
+    supplier_name: string | null;
+    min_order_quantity: string | number | null;
+    is_active: boolean;
+}
+
+export interface RecipeIngredient {
+    id: string;
+    menu_item_id: number;
+    ingredient_id: string;
+    quantity_used: string | number;
+    unit: string;
+    ingredient_name: string;
+    ingredient_category: string | null;
+    cost_per_unit: string | number;
+}
+
+export interface AdminMenuItem {
+    id: number;
+    name: string;
+    price: string | number;
+}
+
+export async function fetchAdminMenuItems(slug: string): Promise<AdminMenuItem[]> {
+    const res = await fetch(`${API_BASE}/api/${slug}/menu`);
+    if (!res.ok) return [];
+    return res.json();
+}
+
+export async function fetchIngredients(slug: string): Promise<Ingredient[]> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/ingredients`, {
+        headers: getAuthHeader()
+    });
+    if (!res.ok) throw new Error("Failed to fetch ingredients");
+    return res.json();
+}
+
+export async function createIngredient(slug: string, ingredient: Partial<Ingredient>) {
+    return fetch(`${API_BASE}/api/admin/${slug}/ingredients`, {
+        method: "POST",
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(ingredient)
+    });
+}
+
+export async function updateIngredient(slug: string, id: string, ingredient: Partial<Ingredient>) {
+    return fetch(`${API_BASE}/api/admin/${slug}/ingredients/${id}`, {
+        method: "PUT",
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(ingredient)
+    });
+}
+
+export async function deleteIngredient(slug: string, id: string) {
+    return fetch(`${API_BASE}/api/admin/${slug}/ingredients/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeader()
+    });
+}
+
+export async function fetchRecipeForMenuItem(slug: string, menuItemId: number): Promise<{ menu_item: AdminMenuItem; recipe: RecipeIngredient[] }> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/menu-items/${menuItemId}/recipe`, {
+        headers: getAuthHeader()
+    });
+    if (!res.ok) throw new Error("Failed to fetch recipe");
+    return res.json();
+}
+
+export async function addIngredientToRecipe(
+    slug: string,
+    menuItemId: number,
+    payload: { ingredient_id: string; quantity_used: number; unit: string }
+) {
+    return fetch(`${API_BASE}/api/admin/${slug}/menu-items/${menuItemId}/recipe`, {
+        method: "POST",
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+}
+
+export async function updateRecipeIngredient(
+    slug: string,
+    id: string,
+    payload: { quantity_used: number; unit: string }
+) {
+    return fetch(`${API_BASE}/api/admin/${slug}/recipe-ingredients/${id}`, {
+        method: "PUT",
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+}
+
+export async function deleteRecipeIngredient(slug: string, id: string) {
+    return fetch(`${API_BASE}/api/admin/${slug}/recipe-ingredients/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeader()
+    });
+}
+
+export async function fetchMenuItemFoodCosts(slug: string): Promise<Array<{ id: number; name: string; selling_price: number; food_cost: number; food_cost_percentage: number }>> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/menu-items/food-cost`, {
+        headers: getAuthHeader()
+    });
+    if (!res.ok) throw new Error("Failed to fetch food costs");
+    return res.json();
+}
+
 export type MenuChatMessage = {
     role: "user" | "assistant";
     content: string;
