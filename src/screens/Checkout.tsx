@@ -212,7 +212,13 @@ export default function Checkout({ onBack }: CheckoutProps) {
                 total,
                 upsellAccepted,
                 upsellValue,
-                cartItems.map(item => ({ name: item.name, price: item.price, is_upsell: item.is_upsell || false })),
+                cartItems.map(item => ({
+                    menu_item_id: item.id,
+                    name: item.name,
+                    quantity: 1,
+                    price: parsePrice(item.price),
+                    is_upsell: item.is_upsell || false
+                })),
                 state.tableNumber,
                 state.customerName,
                 phone

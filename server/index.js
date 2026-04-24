@@ -141,6 +141,98 @@ const pool = new Pool({
                 UNIQUE (menu_item_id, ingredient_id)
             )
         `);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS order_items (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                menu_item_id INTEGER REFERENCES menus(id) ON DELETE SET NULL,
+                item_name VARCHAR(255) NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                unit_price NUMERIC(10,2) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_menu_item_id ON order_items(menu_item_id)`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS inventory_snapshots (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cafe_slug VARCHAR(255) NOT NULL,
+                ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+                quantity_on_hand NUMERIC(10,2) NOT NULL,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                recorded_by VARCHAR(255)
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_snapshots_slug_recorded_at ON inventory_snapshots(cafe_slug, recorded_at)`);
+
+        const existingOrderItemsResult = await pool.query("SELECT COUNT(*)::int AS count FROM order_items");
+        const existingOrderItemsCount = existingOrderItemsResult.rows[0]?.count || 0;
+        if (existingOrderItemsCount === 0) {
+            const ordersResult = await pool.query("SELECT id, restaurant_id, items FROM orders ORDER BY id ASC");
+            for (const order of ordersResult.rows) {
+                if (!order.items) continue;
+
+                let parsedItems;
+                try {
+                    if (Array.isArray(order.items)) {
+                        parsedItems = order.items;
+                    } else if (typeof order.items === "string") {
+                        parsedItems = JSON.parse(order.items);
+                    } else {
+                        console.warn(`[order_items backfill] Unsupported items shape for order ${order.id}`);
+                        continue;
+                    }
+                } catch (err) {
+                    console.warn(`[order_items backfill] Failed to parse items JSON for order ${order.id}`);
+                    continue;
+                }
+
+                if (!Array.isArray(parsedItems) || parsedItems.length === 0) continue;
+
+                for (const item of parsedItems) {
+                    const itemName = typeof item?.name === "string" ? item.name.trim() : "";
+                    if (!itemName) {
+                        console.warn(`[order_items backfill] Skipping unnamed item for order ${order.id}`);
+                        continue;
+                    }
+
+                    let menuItemId = Number.isInteger(item?.menu_item_id) ? item.menu_item_id : null;
+                    if (!menuItemId && Number.isInteger(item?.id)) {
+                        menuItemId = item.id;
+                    }
+                    if (!menuItemId) {
+                        const menuLookupResult = await pool.query(
+                            `SELECT id FROM menus
+                             WHERE restaurant_id = $1 AND LOWER(name) = LOWER($2)
+                             LIMIT 1`,
+                            [order.restaurant_id, itemName]
+                        );
+                        if (menuLookupResult.rows.length > 0) {
+                            menuItemId = menuLookupResult.rows[0].id;
+                        } else {
+                            console.warn(`[order_items backfill] No menu match for order ${order.id}: "${itemName}"`);
+                        }
+                    }
+
+                    const quantityRaw = Number(item?.quantity ?? item?.qty ?? 1);
+                    const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? Math.round(quantityRaw) : 1;
+                    const unitPriceRaw = typeof item?.price === "number"
+                        ? item.price
+                        : Number(String(item?.price ?? "").replace(/[^\d.]/g, ""));
+                    const unitPrice = Number.isFinite(unitPriceRaw) ? unitPriceRaw : 0;
+
+                    await pool.query(
+                        `INSERT INTO order_items (order_id, menu_item_id, item_name, quantity, unit_price)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [order.id, menuItemId, itemName, quantity, unitPrice]
+                    );
+                }
+            }
+            console.log("✅ order_items backfill completed");
+        } else {
+            console.log("ℹ️ order_items backfill skipped (table already has rows)");
+        }
         console.log("✅ DB Migrations applied (restaurants, admins, orders, menus, upsell_events, customers)");
 
         // --- Local Database Seeding ---
@@ -684,6 +776,89 @@ app.get("/api/admin/:slug/menu-items/food-cost", authenticateAdmin, async (req, 
     }
 });
 
+app.get("/api/admin/:slug/inventory/variance", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const daysRaw = Number(req.query.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.round(daysRaw) : 7;
+
+    try {
+        const inventoryTableCheck = await pool.query(`SELECT to_regclass('public.inventory_snapshots') AS table_name`);
+        if (!inventoryTableCheck.rows[0]?.table_name) {
+            return res.json({ days, total_variance_cost: 0, items: [] });
+        }
+
+        const varianceResult = await pool.query(
+            `WITH theoretical_usage AS (
+                SELECT
+                    ri.ingredient_id,
+                    COALESCE(SUM(ri.quantity_used * oi.quantity), 0) AS theoretical_usage
+                FROM order_items oi
+                JOIN orders o ON o.id = oi.order_id
+                JOIN recipe_ingredients ri ON ri.menu_item_id = oi.menu_item_id
+                WHERE o.restaurant_id = $1
+                  AND o.created_at >= NOW() - (($2::text || ' days')::interval)
+                GROUP BY ri.ingredient_id
+            ),
+            snapshots_in_window AS (
+                SELECT
+                    s.ingredient_id,
+                    s.quantity_on_hand,
+                    s.recorded_at,
+                    ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at ASC) AS first_rank,
+                    ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at DESC) AS last_rank
+                FROM inventory_snapshots s
+                WHERE s.cafe_slug = $3
+                  AND s.recorded_at >= NOW() - (($2::text || ' days')::interval)
+            ),
+            snapshot_delta AS (
+                SELECT
+                    f.ingredient_id,
+                    (f.quantity_on_hand - l.quantity_on_hand) AS actual_usage
+                FROM snapshots_in_window f
+                JOIN snapshots_in_window l
+                  ON l.ingredient_id = f.ingredient_id
+                WHERE f.first_rank = 1 AND l.last_rank = 1
+            )
+            SELECT
+                i.id AS ingredient_id,
+                i.name AS ingredient_name,
+                COALESCE(t.theoretical_usage, 0) AS theoretical_usage,
+                COALESCE(s.actual_usage, 0) AS actual_usage,
+                (COALESCE(s.actual_usage, 0) - COALESCE(t.theoretical_usage, 0)) AS variance,
+                i.cost_per_unit
+            FROM ingredients i
+            LEFT JOIN theoretical_usage t ON t.ingredient_id = i.id
+            LEFT JOIN snapshot_delta s ON s.ingredient_id = i.id
+            WHERE i.cafe_slug = $3
+              AND i.is_active = true`,
+            [req.admin.restaurant_id, days, slug]
+        );
+
+        const items = varianceResult.rows
+            .map((row) => {
+                const theoreticalUsage = Number(row.theoretical_usage) || 0;
+                const actualUsage = Number(row.actual_usage) || 0;
+                const variance = actualUsage - theoreticalUsage;
+                const varianceCost = Math.round(variance * (Number(row.cost_per_unit) || 0));
+                return {
+                    ingredient_id: row.ingredient_id,
+                    ingredient_name: row.ingredient_name,
+                    theoretical_usage: Math.round(theoreticalUsage),
+                    actual_usage: Math.round(actualUsage),
+                    variance: Math.round(variance),
+                    variance_cost: varianceCost
+                };
+            })
+            .filter((row) => row.variance > 0);
+
+        const totalVarianceCost = Math.round(items.reduce((sum, row) => sum + row.variance_cost, 0));
+        res.json({ days, total_variance_cost: totalVarianceCost, items });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch inventory variance" });
+    }
+});
+
 // --- OpenAI Client ---
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const { generateUpsell } = require("./aiUpsellEngine");
@@ -931,7 +1106,27 @@ app.post("/api/:slug/order-complete", async (req, res) => {
             [resResult.rows[0].id, JSON.stringify(items), total, customer_name, customer_phone, upsellAccepted, tableNumber || null, Math.round(Number(upsellValue) || 0)]
         );
 
-        res.json({ success: true, orderId: result.rows[0].id });
+        const orderId = result.rows[0].id;
+        const safeItems = Array.isArray(items) ? items : [];
+        for (const item of safeItems) {
+            const itemName = typeof item?.name === "string" ? item.name.trim() : "";
+            if (!itemName) continue;
+            const menuItemId = Number.isInteger(item?.menu_item_id) ? item.menu_item_id : (Number.isInteger(item?.id) ? item.id : null);
+            const quantityRaw = Number(item?.quantity ?? item?.qty ?? 1);
+            const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? Math.round(quantityRaw) : 1;
+            const unitPriceRaw = typeof item?.price === "number"
+                ? item.price
+                : Number(String(item?.price ?? "").replace(/[^\d.]/g, ""));
+            const unitPrice = Number.isFinite(unitPriceRaw) ? unitPriceRaw : 0;
+
+            await pool.query(
+                `INSERT INTO order_items (order_id, menu_item_id, item_name, quantity, unit_price)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [orderId, menuItemId, itemName, quantity, unitPrice]
+            );
+        }
+
+        res.json({ success: true, orderId });
     } catch (err) {
         console.error("[order-complete] Error:", err.message);
         res.status(500).json({ success: false });
