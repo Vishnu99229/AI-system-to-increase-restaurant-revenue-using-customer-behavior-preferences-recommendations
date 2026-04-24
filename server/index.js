@@ -191,6 +191,7 @@ const authenticateAdmin = async (req, res, next) => {
 // --- CORS Configuration ---
 const ALLOWED_ORIGINS = [
     "https://orlena.talk",
+    "https://app.orlena.talk",
     "https://api.orlena.talk",
     "https://qr-menu-upsell.vercel.app",
     "http://localhost:5173",
