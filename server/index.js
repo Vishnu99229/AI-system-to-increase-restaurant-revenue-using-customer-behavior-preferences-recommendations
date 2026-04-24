@@ -168,6 +168,34 @@ const pool = new Pool({
             )
         `);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_waste_log_slug_logged_at ON waste_log(cafe_slug, logged_at)`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS demand_forecasts (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cafe_slug VARCHAR(255) NOT NULL,
+                menu_item_id INTEGER REFERENCES menus(id) ON DELETE CASCADE,
+                forecast_date DATE NOT NULL,
+                predicted_quantity NUMERIC(10,2) NOT NULL,
+                actual_quantity NUMERIC(10,2),
+                confidence_score NUMERIC(5,4),
+                model_version VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_demand_forecasts_slug_date ON demand_forecasts(cafe_slug, forecast_date)`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS purchase_recommendations (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cafe_slug VARCHAR(255) NOT NULL,
+                ingredient_id UUID REFERENCES ingredients(id) ON DELETE CASCADE,
+                recommendation_date DATE NOT NULL,
+                recommended_quantity NUMERIC(10,2) NOT NULL,
+                estimated_cost NUMERIC(10,2) NOT NULL,
+                reason TEXT,
+                status VARCHAR(50) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchase_recs_slug_date ON purchase_recommendations(cafe_slug, recommendation_date)`);
 
         const existingOrderItemsResult = await pool.query("SELECT COUNT(*)::int AS count FROM order_items");
         const existingOrderItemsCount = existingOrderItemsResult.rows[0]?.count || 0;
