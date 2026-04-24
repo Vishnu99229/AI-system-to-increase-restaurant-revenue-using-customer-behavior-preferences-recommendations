@@ -491,7 +491,7 @@ app.post("/api/menu/:slug/chat", async (req, res) => {
         }
 
         const restaurantResult = await pool.query(
-            "SELECT id, name FROM restaurants WHERE domain = $1 OR slug = $1 LIMIT 1",
+            "SELECT id, name FROM restaurants WHERE domain = $1 LIMIT 1",
             [slug]
         );
 
