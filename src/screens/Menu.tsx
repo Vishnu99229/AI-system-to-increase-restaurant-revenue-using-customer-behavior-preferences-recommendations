@@ -981,7 +981,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                                         </div>
                                         <div>
                                             <div className="text-base font-semibold text-[#1A1A2E] leading-tight">Orlena</div>
-                                            <div className="text-xs text-[#888888] leading-tight mt-0.5">Powered by GPT</div>
+                                            <div className="text-xs text-[#888888] leading-tight mt-0.5">Your AI Concierge</div>
                                         </div>
                                     </div>
                                     <button
