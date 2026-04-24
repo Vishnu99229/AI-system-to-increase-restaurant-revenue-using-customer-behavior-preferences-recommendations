@@ -155,16 +155,19 @@ const pool = new Pool({
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_menu_item_id ON order_items(menu_item_id)`);
         await pool.query(`
-            CREATE TABLE IF NOT EXISTS inventory_snapshots (
+            CREATE TABLE IF NOT EXISTS waste_log (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 cafe_slug VARCHAR(255) NOT NULL,
                 ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
-                quantity_on_hand NUMERIC(10,2) NOT NULL,
-                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                recorded_by VARCHAR(255)
+                quantity_wasted NUMERIC(10,2) NOT NULL,
+                reason VARCHAR(50) NOT NULL CHECK (reason IN ('expired', 'spoiled', 'overprepped', 'dropped', 'plate_waste', 'other')),
+                cost_value NUMERIC(10,2) NOT NULL,
+                notes TEXT,
+                logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                logged_by VARCHAR(255)
             )
         `);
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_snapshots_slug_recorded_at ON inventory_snapshots(cafe_slug, recorded_at)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_waste_log_slug_logged_at ON waste_log(cafe_slug, logged_at)`);
 
         const existingOrderItemsResult = await pool.query("SELECT COUNT(*)::int AS count FROM order_items");
         const existingOrderItemsCount = existingOrderItemsResult.rows[0]?.count || 0;
@@ -773,6 +776,215 @@ app.get("/api/admin/:slug/menu-items/food-cost", authenticateAdmin, async (req, 
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch food cost" });
+    }
+});
+
+app.get("/api/admin/:slug/inventory", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    try {
+        const result = await pool.query(
+            `SELECT
+                i.id AS ingredient_id,
+                i.name AS ingredient_name,
+                i.category,
+                i.unit,
+                latest.quantity_on_hand,
+                latest.recorded_at,
+                latest.recorded_by
+             FROM ingredients i
+             LEFT JOIN LATERAL (
+                SELECT s.quantity_on_hand, s.recorded_at, s.recorded_by
+                FROM inventory_snapshots s
+                WHERE s.ingredient_id = i.id AND s.cafe_slug = $1
+                ORDER BY s.recorded_at DESC
+                LIMIT 1
+             ) latest ON true
+             WHERE i.cafe_slug = $1 AND i.is_active = true
+             ORDER BY i.name ASC`,
+            [slug]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch inventory snapshots" });
+    }
+});
+
+app.get("/api/admin/:slug/inventory/history", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const { ingredient_id } = req.query;
+    const daysRaw = Number(req.query.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.round(daysRaw) : 7;
+    if (!ingredient_id || typeof ingredient_id !== "string") {
+        return res.status(400).json({ error: "ingredient_id is required" });
+    }
+    try {
+        const result = await pool.query(
+            `SELECT id, ingredient_id, quantity_on_hand, recorded_at, recorded_by
+             FROM inventory_snapshots
+             WHERE cafe_slug = $1
+               AND ingredient_id = $2
+               AND recorded_at >= NOW() - (($3::text || ' days')::interval)
+             ORDER BY recorded_at DESC`,
+            [slug, ingredient_id, days]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch inventory history" });
+    }
+});
+
+app.post("/api/admin/:slug/inventory", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const recordedBy = req.body?.recorded_by || null;
+    if (items.length === 0) return res.status(400).json({ error: "items are required" });
+    try {
+        await pool.query("BEGIN");
+        for (const item of items) {
+            const ingredientId = item?.ingredient_id;
+            const quantityOnHand = Number(item?.quantity_on_hand);
+            if (!ingredientId || !Number.isFinite(quantityOnHand)) continue;
+            await pool.query(
+                `INSERT INTO inventory_snapshots (cafe_slug, ingredient_id, quantity_on_hand, recorded_by)
+                 VALUES ($1, $2, $3, $4)`,
+                [slug, ingredientId, quantityOnHand, recordedBy]
+            );
+        }
+        await pool.query("COMMIT");
+        res.json({ success: true });
+    } catch (err) {
+        await pool.query("ROLLBACK");
+        res.status(500).json({ error: "Failed to record inventory stock take" });
+    }
+});
+
+app.get("/api/admin/:slug/waste", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const daysRaw = Number(req.query.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.round(daysRaw) : 7;
+    try {
+        const result = await pool.query(
+            `SELECT
+                w.id,
+                w.ingredient_id,
+                i.name AS ingredient_name,
+                w.quantity_wasted,
+                w.reason,
+                w.cost_value,
+                w.notes,
+                w.logged_at,
+                w.logged_by
+             FROM waste_log w
+             JOIN ingredients i ON i.id = w.ingredient_id
+             WHERE w.cafe_slug = $1
+               AND w.logged_at >= NOW() - (($2::text || ' days')::interval)
+             ORDER BY w.logged_at DESC`,
+            [slug, days]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch waste logs" });
+    }
+});
+
+app.post("/api/admin/:slug/waste", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const { ingredient_id, quantity_wasted, reason, notes, logged_by } = req.body;
+    const validReasons = new Set(["expired", "spoiled", "overprepped", "dropped", "plate_waste", "other"]);
+    if (!validReasons.has(reason)) return res.status(400).json({ error: "Invalid reason" });
+    try {
+        const ingredientResult = await pool.query(
+            `SELECT cost_per_unit FROM ingredients
+             WHERE id = $1 AND cafe_slug = $2 AND is_active = true`,
+            [ingredient_id, slug]
+        );
+        if (ingredientResult.rows.length === 0) return res.status(404).json({ error: "Ingredient not found" });
+        const quantityWasted = Number(quantity_wasted);
+        if (!Number.isFinite(quantityWasted) || quantityWasted <= 0) {
+            return res.status(400).json({ error: "quantity_wasted must be positive" });
+        }
+        const costPerUnit = Number(ingredientResult.rows[0].cost_per_unit) || 0;
+        const costValue = Math.round(quantityWasted * costPerUnit);
+        const result = await pool.query(
+            `INSERT INTO waste_log (
+                cafe_slug, ingredient_id, quantity_wasted, reason, cost_value, notes, logged_by
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING *`,
+            [slug, ingredient_id, quantityWasted, reason, costValue, notes || null, logged_by || null]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to log waste event" });
+    }
+});
+
+app.get("/api/admin/:slug/waste/summary", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+    const daysRaw = Number(req.query.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.round(daysRaw) : 7;
+    try {
+        const totalsResult = await pool.query(
+            `SELECT COALESCE(SUM(cost_value), 0) AS total_waste_cost
+             FROM waste_log
+             WHERE cafe_slug = $1
+               AND logged_at >= NOW() - (($2::text || ' days')::interval)`,
+            [slug, days]
+        );
+        const totalWasteCost = Math.round(Number(totalsResult.rows[0].total_waste_cost) || 0);
+
+        const byReasonResult = await pool.query(
+            `SELECT reason, COALESCE(SUM(cost_value), 0) AS total_cost
+             FROM waste_log
+             WHERE cafe_slug = $1
+               AND logged_at >= NOW() - (($2::text || ' days')::interval)
+             GROUP BY reason
+             ORDER BY total_cost DESC`,
+            [slug, days]
+        );
+
+        const topIngredientsResult = await pool.query(
+            `SELECT
+                i.name AS ingredient_name,
+                COALESCE(SUM(w.quantity_wasted), 0) AS total_quantity,
+                COALESCE(SUM(w.cost_value), 0) AS total_cost
+             FROM waste_log w
+             JOIN ingredients i ON i.id = w.ingredient_id
+             WHERE w.cafe_slug = $1
+               AND w.logged_at >= NOW() - (($2::text || ' days')::interval)
+             GROUP BY i.name
+             ORDER BY total_cost DESC
+             LIMIT 5`,
+            [slug, days]
+        );
+
+        const wasteByReason = byReasonResult.rows.map((row) => {
+            const totalCost = Math.round(Number(row.total_cost) || 0);
+            return {
+                reason: row.reason,
+                total_cost: totalCost,
+                percentage_of_total: totalWasteCost > 0 ? Math.round((totalCost / totalWasteCost) * 100) : 0
+            };
+        });
+
+        const topWastedIngredients = topIngredientsResult.rows.map((row) => ({
+            ingredient_name: row.ingredient_name,
+            total_quantity: Math.round(Number(row.total_quantity) || 0),
+            total_cost: Math.round(Number(row.total_cost) || 0)
+        }));
+
+        res.json({
+            total_waste_cost: totalWasteCost,
+            waste_by_reason: wasteByReason,
+            top_wasted_ingredients: topWastedIngredients
+        });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch waste summary" });
     }
 });
 

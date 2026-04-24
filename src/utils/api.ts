@@ -217,6 +217,43 @@ export interface AdminMenuItem {
     price: string | number;
 }
 
+export interface InventorySnapshotRow {
+    ingredient_id: string;
+    ingredient_name: string;
+    category: string | null;
+    unit: string;
+    quantity_on_hand: string | number | null;
+    recorded_at: string | null;
+    recorded_by: string | null;
+}
+
+export interface InventoryVarianceRow {
+    ingredient_id: string;
+    ingredient_name: string;
+    theoretical_usage: number;
+    actual_usage: number;
+    variance: number;
+    variance_cost: number;
+}
+
+export interface WasteLogRow {
+    id: string;
+    ingredient_id: string;
+    ingredient_name: string;
+    quantity_wasted: string | number;
+    reason: "expired" | "spoiled" | "overprepped" | "dropped" | "plate_waste" | "other";
+    cost_value: string | number;
+    notes: string | null;
+    logged_at: string;
+    logged_by: string | null;
+}
+
+export interface WasteSummary {
+    total_waste_cost: number;
+    waste_by_reason: Array<{ reason: string; total_cost: number; percentage_of_total: number }>;
+    top_wasted_ingredients: Array<{ ingredient_name: string; total_quantity: number; total_cost: number }>;
+}
+
 export async function fetchAdminMenuItems(slug: string): Promise<AdminMenuItem[]> {
     const res = await fetch(`${API_BASE}/api/${slug}/menu`);
     if (!res.ok) return [];
@@ -310,6 +347,52 @@ export async function fetchMenuItemFoodCosts(slug: string): Promise<Array<{ id: 
         headers: getAuthHeader()
     });
     if (!res.ok) throw new Error("Failed to fetch food costs");
+    return res.json();
+}
+
+export async function fetchInventory(slug: string): Promise<InventorySnapshotRow[]> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/inventory`, { headers: getAuthHeader() });
+    if (!res.ok) throw new Error("Failed to fetch inventory");
+    return res.json();
+}
+
+export async function fetchInventoryHistory(slug: string, ingredientId: string, days: number): Promise<Array<{ id: string; ingredient_id: string; quantity_on_hand: string | number; recorded_at: string; recorded_by: string | null }>> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/inventory/history?ingredient_id=${encodeURIComponent(ingredientId)}&days=${days}`, { headers: getAuthHeader() });
+    if (!res.ok) throw new Error("Failed to fetch inventory history");
+    return res.json();
+}
+
+export async function recordInventoryStockTake(slug: string, payload: { items: Array<{ ingredient_id: string; quantity_on_hand: number }>; recorded_by?: string }) {
+    return fetch(`${API_BASE}/api/admin/${slug}/inventory`, {
+        method: "POST",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+}
+
+export async function fetchInventoryVariance(slug: string, days: number): Promise<{ days: number; total_variance_cost: number; items: InventoryVarianceRow[] }> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/inventory/variance?days=${days}`, { headers: getAuthHeader() });
+    if (!res.ok) throw new Error("Failed to fetch inventory variance");
+    return res.json();
+}
+
+export async function fetchWasteLogs(slug: string, days: number): Promise<WasteLogRow[]> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/waste?days=${days}`, { headers: getAuthHeader() });
+    if (!res.ok) throw new Error("Failed to fetch waste logs");
+    return res.json();
+}
+
+export async function createWasteLog(slug: string, payload: { ingredient_id: string; quantity_wasted: number; reason: WasteLogRow["reason"]; notes?: string; logged_by?: string }) {
+    return fetch(`${API_BASE}/api/admin/${slug}/waste`, {
+        method: "POST",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+}
+
+export async function fetchWasteSummary(slug: string, days: number): Promise<WasteSummary> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/waste/summary?days=${days}`, { headers: getAuthHeader() });
+    if (!res.ok) throw new Error("Failed to fetch waste summary");
     return res.json();
 }
 

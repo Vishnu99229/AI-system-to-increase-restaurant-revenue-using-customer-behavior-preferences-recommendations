@@ -17,6 +17,12 @@ import {
     updateRecipeIngredient,
     deleteRecipeIngredient,
     fetchMenuItemFoodCosts,
+    fetchInventory,
+    recordInventoryStockTake,
+    fetchInventoryVariance,
+    fetchWasteLogs,
+    createWasteLog,
+    fetchWasteSummary,
     type Ingredient
 } from "../../utils/api";
 
@@ -35,7 +41,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) {
-    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes">("analytics");
+    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes" | "stockTake" | "wasteLog">("analytics");
     const [analytics, setAnalytics] = useState<any>(null);
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -91,6 +97,8 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                 <TabButton active={activeTab === "menu"} onClick={() => setActiveTab("menu")}>Menu Manager</TabButton>
                 <TabButton active={activeTab === "ingredients"} onClick={() => setActiveTab("ingredients")}>Ingredients</TabButton>
                 <TabButton active={activeTab === "recipes"} onClick={() => setActiveTab("recipes")}>Recipe Mapping</TabButton>
+                <TabButton active={activeTab === "stockTake"} onClick={() => setActiveTab("stockTake")}>Stock Take</TabButton>
+                <TabButton active={activeTab === "wasteLog"} onClick={() => setActiveTab("wasteLog")}>Waste Log</TabButton>
             </nav>
 
             {/* Sound unlock banner */}
@@ -122,6 +130,8 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                         {activeTab === "menu" && <MenuView items={menuItems} onUpdate={() => loadData()} slug={slug} onLogout={onLogout} />}
                         {activeTab === "ingredients" && <IngredientsView slug={slug} onLogout={onLogout} />}
                         {activeTab === "recipes" && <RecipeMappingView slug={slug} onLogout={onLogout} />}
+                        {activeTab === "stockTake" && <StockTakeView slug={slug} onLogout={onLogout} />}
+                        {activeTab === "wasteLog" && <WasteLogView slug={slug} onLogout={onLogout} />}
                     </>
                 )}
             </main>
@@ -1201,6 +1211,285 @@ function RecipeRow({
                     <div className="flex justify-end gap-2">
                         <button onClick={onCancel} className="text-xs">Cancel</button>
                         <button onClick={() => onSave(row.id, Number(quantity), unit)} className="text-xs font-bold text-white bg-orange-600 rounded px-2 py-1">Save</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function StockTakeView({ slug, onLogout }: { slug: string; onLogout: () => void }) {
+    const [inventoryRows, setInventoryRows] = useState<Array<{
+        ingredient_id: string;
+        ingredient_name: string;
+        category: string | null;
+        unit: string;
+        quantity_on_hand: string | number | null;
+        recorded_at: string | null;
+    }>>([]);
+    const [variance, setVariance] = useState<{ total_variance_cost: number; items: Array<{ ingredient_id: string; ingredient_name: string; theoretical_usage: number; actual_usage: number; variance: number; variance_cost: number }> }>({ total_variance_cost: 0, items: [] });
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [recordedBy, setRecordedBy] = useState("");
+    const [quantities, setQuantities] = useState<Record<string, string>>({});
+    const [isSaving, setIsSaving] = useState(false);
+
+    const load = async () => {
+        const [inventory, varianceData] = await Promise.all([
+            fetchInventory(slug),
+            fetchInventoryVariance(slug, 7)
+        ]);
+        setInventoryRows(inventory);
+        setVariance({ total_variance_cost: varianceData.total_variance_cost, items: varianceData.items });
+        const mapped: Record<string, string> = {};
+        for (const row of inventory) {
+            mapped[row.ingredient_id] = String(row.quantity_on_hand ?? "");
+        }
+        setQuantities(mapped);
+    };
+
+    useEffect(() => {
+        load().catch(console.error);
+    }, [slug]);
+
+    const handleSaveStockTake = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (isSaving) return;
+        setIsSaving(true);
+        try {
+            const items = inventoryRows.map((row) => ({
+                ingredient_id: row.ingredient_id,
+                quantity_on_hand: Number(quantities[row.ingredient_id] || 0)
+            }));
+            const response = await recordInventoryStockTake(slug, {
+                items,
+                recorded_by: recordedBy.trim() || undefined
+            });
+            if (handleAuthError(response, onLogout)) return;
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                alert(data.error || "Failed to record stock take");
+                return;
+            }
+            setIsModalOpen(false);
+            setRecordedBy("");
+            await load();
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <div className="space-y-4 max-w-md mx-auto">
+            <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-gray-800">Stock Take</h3>
+                <button onClick={() => setIsModalOpen(true)} className="bg-orange-600 text-white text-sm font-bold px-3 py-2 rounded-lg">Record Stock Take</button>
+            </div>
+
+            <div className="space-y-2">
+                {inventoryRows.map((row) => (
+                    <div key={row.ingredient_id} className="bg-white border border-gray-200 rounded-xl p-3">
+                        <p className="font-bold text-sm text-gray-800">{row.ingredient_name}</p>
+                        <p className="text-xs text-gray-500">
+                            Last: {Math.round(Number(row.quantity_on_hand || 0))} {row.unit} | {row.recorded_at ? new Date(row.recorded_at).toLocaleString() : "No snapshot yet"}
+                        </p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-xl p-3">
+                <h4 className="font-bold text-gray-800 text-sm mb-2">Usage Variance</h4>
+                <div className="space-y-2">
+                    {variance.items.map((row) => (
+                        <div key={row.ingredient_id} className="border border-gray-100 rounded-lg p-2">
+                            <p className="font-bold text-sm text-gray-800">{row.ingredient_name}</p>
+                            <p className="text-xs text-gray-600">
+                                Theoretical: {Math.round(row.theoretical_usage)} | Actual: {Math.round(row.actual_usage)} | Variance: {Math.round(row.variance)}
+                            </p>
+                            <p className={`text-xs font-bold ${Math.round(row.variance_cost) > 500 ? "text-red-600" : "text-orange-600"}`}>
+                                Variance Cost: INR {Math.round(row.variance_cost)}
+                            </p>
+                        </div>
+                    ))}
+                    {variance.items.length === 0 && <p className="text-sm text-gray-500 text-center py-4">No positive variance found.</p>}
+                </div>
+                <p className="text-sm font-bold text-gray-800 mt-3">Total Variance Cost: INR {Math.round(variance.total_variance_cost)}</p>
+            </div>
+
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl p-4 w-full max-w-md max-h-[90vh] overflow-y-auto">
+                        <h4 className="font-bold text-gray-800 mb-3">Record Stock Take</h4>
+                        <form onSubmit={handleSaveStockTake} className="space-y-3">
+                            <input value={recordedBy} onChange={(e) => setRecordedBy(e.target.value)} placeholder="Recorded By (optional)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            {inventoryRows.map((row) => (
+                                <div key={row.ingredient_id} className="grid grid-cols-2 gap-2 items-center">
+                                    <p className="text-xs font-medium text-gray-700">{row.ingredient_name}</p>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={quantities[row.ingredient_id] ?? ""}
+                                        onChange={(e) => setQuantities((prev) => ({ ...prev, [row.ingredient_id]: e.target.value }))}
+                                        className="w-full border rounded-lg px-2 py-1 text-sm"
+                                    />
+                                </div>
+                            ))}
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={() => setIsModalOpen(false)} className="px-3 py-2 text-sm">Cancel</button>
+                                <button type="submit" disabled={isSaving} className="bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-bold">{isSaving ? "Saving..." : "Save"}</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function WasteLogView({ slug, onLogout }: { slug: string; onLogout: () => void }) {
+    const [days, setDays] = useState(7);
+    const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+    const [wasteLogs, setWasteLogs] = useState<Array<{
+        id: string;
+        ingredient_id: string;
+        ingredient_name: string;
+        quantity_wasted: string | number;
+        reason: "expired" | "spoiled" | "overprepped" | "dropped" | "plate_waste" | "other";
+        cost_value: string | number;
+        notes: string | null;
+        logged_at: string;
+    }>>([]);
+    const [summary, setSummary] = useState<{
+        total_waste_cost: number;
+        waste_by_reason: Array<{ reason: string; total_cost: number; percentage_of_total: number }>;
+        top_wasted_ingredients: Array<{ ingredient_name: string; total_quantity: number; total_cost: number }>;
+    }>({ total_waste_cost: 0, waste_by_reason: [], top_wasted_ingredients: [] });
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [ingredientSearch, setIngredientSearch] = useState("");
+    const [ingredientId, setIngredientId] = useState("");
+    const [quantity, setQuantity] = useState("");
+    const [reason, setReason] = useState<"expired" | "spoiled" | "overprepped" | "dropped" | "plate_waste" | "other">("expired");
+    const [notes, setNotes] = useState("");
+    const [loggedBy, setLoggedBy] = useState("");
+
+    const load = async () => {
+        const [ingredientRows, logs, summaryData] = await Promise.all([
+            fetchIngredients(slug),
+            fetchWasteLogs(slug, days),
+            fetchWasteSummary(slug, days)
+        ]);
+        setIngredients(ingredientRows);
+        setWasteLogs(logs);
+        setSummary(summaryData);
+    };
+
+    useEffect(() => {
+        load().catch(console.error);
+    }, [slug, days]);
+
+    const handleSaveWaste = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const response = await createWasteLog(slug, {
+            ingredient_id: ingredientId,
+            quantity_wasted: Number(quantity),
+            reason,
+            notes: notes.trim() || undefined,
+            logged_by: loggedBy.trim() || undefined
+        });
+        if (handleAuthError(response, onLogout)) return;
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            alert(data.error || "Failed to log waste");
+            return;
+        }
+        setIngredientId("");
+        setQuantity("");
+        setNotes("");
+        setLoggedBy("");
+        setReason("expired");
+        setIsModalOpen(false);
+        await load();
+    };
+
+    const filteredIngredients = ingredients.filter((ingredient) => ingredient.name.toLowerCase().includes(ingredientSearch.toLowerCase()));
+
+    return (
+        <div className="space-y-4 max-w-md mx-auto">
+            <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-gray-800">Waste Log</h3>
+                <button onClick={() => setIsModalOpen(true)} className="bg-orange-600 text-white text-sm font-bold px-3 py-2 rounded-lg">Log Waste</button>
+            </div>
+
+            <div className="flex gap-2">
+                {[7, 14, 30].map((value) => (
+                    <button
+                        key={value}
+                        onClick={() => setDays(value)}
+                        className={`px-3 py-1 rounded-full text-xs font-bold border ${days === value ? "bg-orange-600 text-white border-orange-600" : "bg-white text-gray-600 border-gray-200"}`}
+                    >
+                        {value} days
+                    </button>
+                ))}
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-xl p-3 space-y-2">
+                <p className="text-sm font-bold text-gray-800">Total Waste Cost: INR {Math.round(summary.total_waste_cost)}</p>
+                <div>
+                    <p className="text-xs font-bold text-gray-600 mb-1">By Reason</p>
+                    {summary.waste_by_reason.map((row) => (
+                        <p key={row.reason} className="text-xs text-gray-600">{row.reason}: INR {Math.round(row.total_cost)} ({Math.round(row.percentage_of_total)}%)</p>
+                    ))}
+                    {summary.waste_by_reason.length === 0 && <p className="text-xs text-gray-500">No waste data in this period.</p>}
+                </div>
+                <div>
+                    <p className="text-xs font-bold text-gray-600 mb-1">Top Wasted Ingredients</p>
+                    {summary.top_wasted_ingredients.slice(0, 3).map((row) => (
+                        <p key={row.ingredient_name} className="text-xs text-gray-600">{row.ingredient_name}: INR {Math.round(row.total_cost)}</p>
+                    ))}
+                    {summary.top_wasted_ingredients.length === 0 && <p className="text-xs text-gray-500">No wasted ingredients yet.</p>}
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                {wasteLogs.map((log) => (
+                    <div key={log.id} className="bg-white border border-gray-200 rounded-xl p-3">
+                        <p className="font-bold text-sm text-gray-800">{log.ingredient_name}</p>
+                        <p className="text-xs text-gray-600">
+                            {new Date(log.logged_at).toLocaleString()} | Qty: {Math.round(Number(log.quantity_wasted) * 100) / 100} | {log.reason}
+                        </p>
+                        <p className="text-xs font-bold text-red-600">Cost: INR {Math.round(Number(log.cost_value) || 0)}</p>
+                    </div>
+                ))}
+                {wasteLogs.length === 0 && <p className="text-sm text-gray-500 text-center py-4">No waste logs found.</p>}
+            </div>
+
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl p-4 w-full max-w-md">
+                        <h4 className="font-bold text-gray-800 mb-3">Log Waste</h4>
+                        <form onSubmit={handleSaveWaste} className="space-y-2">
+                            <input value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} placeholder="Search ingredient" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <select required value={ingredientId} onChange={(e) => setIngredientId(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+                                <option value="">Select ingredient</option>
+                                {filteredIngredients.map((ingredient) => (
+                                    <option key={ingredient.id} value={ingredient.id}>{ingredient.name}</option>
+                                ))}
+                            </select>
+                            <input required type="number" step="0.01" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Quantity wasted" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <select value={reason} onChange={(e) => setReason(e.target.value as "expired" | "spoiled" | "overprepped" | "dropped" | "plate_waste" | "other")} className="w-full border rounded-lg px-3 py-2 text-sm">
+                                <option value="expired">expired</option>
+                                <option value="spoiled">spoiled</option>
+                                <option value="overprepped">overprepped</option>
+                                <option value="dropped">dropped</option>
+                                <option value="plate_waste">plate_waste</option>
+                                <option value="other">other</option>
+                            </select>
+                            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes (optional)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <input value={loggedBy} onChange={(e) => setLoggedBy(e.target.value)} placeholder="Logged by (optional)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={() => setIsModalOpen(false)} className="px-3 py-2 text-sm">Cancel</button>
+                                <button type="submit" className="bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-bold">Save</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
