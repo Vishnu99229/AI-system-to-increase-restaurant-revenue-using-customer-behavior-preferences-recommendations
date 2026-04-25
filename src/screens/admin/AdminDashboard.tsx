@@ -544,7 +544,7 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
     ];
 
     return (
-        <div className="space-y-8"> 
+        <div className="space-y-4 max-w-md mx-auto">
 
             {/* Notification Banner (STRONG alert only) */}
             {activeAlert?.level === "strong" && (
@@ -564,26 +564,26 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 gap-3">
                 {cards.map((card, i) => (
-                    <div key={i} className={`p-6 rounded-2xl border border-gray-100 shadow-sm ${card.color}`}>
-                        <p className="text-sm font-bold uppercase tracking-wider opacity-70 mb-1">{card.label}</p>
-                        <p className="text-3xl font-black">{card.value}</p>
+                    <div key={i} className={`p-3 rounded-xl border border-gray-100 shadow-sm min-w-0 ${card.color}`}>
+                        <p className="text-[10px] font-bold uppercase tracking-wide opacity-70 mb-1 leading-tight">{card.label}</p>
+                        <p className="text-xl font-black leading-tight whitespace-nowrap">{card.value}</p>
                     </div>
                 ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="space-y-4">
                 {/* Impact Chart */}
-                <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-sm">
-                    <h3 className="text-lg font-bold text-gray-800 mb-6">Revenue Impact</h3>
-                    <div className="space-y-6">
+                <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <h3 className="text-base font-bold text-gray-800 mb-4">Revenue Impact</h3>
+                    <div className="space-y-4">
                         <div>
-                            <div className="flex justify-between text-sm font-bold mb-2">
-                                <span>Revenue from AI Upsells</span>
-                                <span className="text-orange-600">+{data.revenueIncreasePercent.toFixed(1)}%</span>
+                            <div className="flex items-start justify-between gap-3 text-sm font-bold mb-2">
+                                <span className="text-gray-700">Revenue from AI Upsells</span>
+                                <span className="text-orange-600 whitespace-nowrap">+{data.revenueIncreasePercent.toFixed(1)}%</span>
                             </div>
-                            <div className="w-full h-4 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
                                 <div 
                                     className="h-full bg-orange-600 transition-all duration-1000" 
                                     style={{ width: `${Math.min(data.revenueIncreasePercent * 2, 100)}%` }}
@@ -591,11 +591,11 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                             </div>
                         </div>
                         <div>
-                            <div className="flex justify-between text-sm font-bold mb-2">
-                                <span>Upsell Conversion Rate</span>
-                                <span className="text-blue-600">{data.upsellConversionRate.toFixed(1)}%</span>
+                            <div className="flex items-start justify-between gap-3 text-sm font-bold mb-2">
+                                <span className="text-gray-700">Upsell Conversion Rate</span>
+                                <span className="text-blue-600 whitespace-nowrap">{data.upsellConversionRate.toFixed(1)}%</span>
                             </div>
-                            <div className="w-full h-4 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
                                 <div 
                                     className="h-full bg-blue-600 transition-all duration-1000" 
                                     style={{ width: `${data.upsellConversionRate}%` }}
@@ -606,18 +606,18 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                 </div>
 
                 {/* Top Items */}
-                <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-sm">
-                    <h3 className="text-lg font-bold text-gray-800 mb-6">Top Upsell Items</h3>
-                    <div className="space-y-4">
+                <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <h3 className="text-base font-bold text-gray-800 mb-4">Top Upsell Items</h3>
+                    <div className="space-y-2">
                         {data.topUpsellItems.map((item: any, i: number) => (
-                            <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                                <div className="flex items-center gap-4">
-                                    <span className="w-8 h-8 flex items-center justify-center bg-white rounded-lg text-sm font-bold text-gray-400">#{i+1}</span>
-                                    <span className="font-bold text-gray-800">{item.name}</span>
+                            <div key={i} className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-xl">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <span className="w-7 h-7 shrink-0 flex items-center justify-center bg-white rounded-lg text-xs font-bold text-gray-400">#{i+1}</span>
+                                    <span className="font-bold text-sm text-gray-800 break-words">{item.name}</span>
                                 </div>
-                                <div className="text-right">
+                                <div className="text-right shrink-0">
                                     <p className="text-sm font-bold text-gray-800">{item.count} sold</p>
-                                    <p className="text-xs text-green-600 font-bold">₹{item.revenue}</p>
+                                    <p className="text-xs text-green-600 font-bold whitespace-nowrap">₹{item.revenue}</p>
                                 </div>
                             </div>
                         ))}
@@ -631,10 +631,10 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
             {/* Active Tables Section */}
             <div
                 ref={activeTablesPanelRef}
-                className="bg-white p-8 rounded-2xl border border-gray-100 shadow-sm"
+                className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm"
                 onClick={() => { if (activeAlert) dismissAlert(); }}
             >
-                <div className="mb-6">
+                <div className="mb-4">
                     <h3 className="text-lg font-bold text-gray-800">Active Tables</h3>
                     <p className="text-sm text-gray-500 mt-1">Live view of tables currently ordering</p>
                 </div>
@@ -644,11 +644,11 @@ function AnalyticsView({ data, slug }: { data: any; slug: string }) {
                         No active tables right now
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="space-y-3">
                         {activeTables.map((table) => {
                             const totalQty = table.itemRows.reduce((sum, r) => sum + r.qty, 0);
                             return (
-                                <div key={table.tableNumber} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                                <div key={table.tableNumber} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
                                     {/* Header */}
                                     <div className="flex items-center justify-between mb-3">
                                         <span className="font-black text-lg text-[#1A1A2E]">Table {table.tableNumber}</span>
@@ -724,42 +724,78 @@ function MenuView({ items, onUpdate, slug, onLogout }: { items: any[]; onUpdate:
         }
     };
 
+    const formatPrice = (price: string | number) => {
+        const numeric = typeof price === "number"
+            ? price
+            : Number(String(price).replace(/[₹,\s]/g, ""));
+        return `₹${Math.round(Number.isFinite(numeric) ? numeric : 0)}`;
+    };
+
+    const groupedItems = items.reduce<Record<string, any[]>>((groups, item) => {
+        const category = item.category || "Uncategorized";
+        if (!groups[category]) groups[category] = [];
+        groups[category].push(item);
+        return groups;
+    }, {});
+
+    const groupedEntries = Object.entries(groupedItems).sort(([a], [b]) => a.localeCompare(b));
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-4 max-w-md mx-auto">
             <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold text-gray-800">Manage Menu</h3>
                 <button 
                     onClick={() => setIsAdding(true)}
-                    className="bg-orange-600 text-white font-bold px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2 text-sm"
+                    className="bg-orange-600 text-white font-bold px-3 py-2 rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2 text-sm"
                 >
-                    Add New Item
+                    Add Item
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {items.map((item) => (
-                    <div key={item.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex gap-4">
-                        <img src={item.image_url || 'https://via.placeholder.com/80'} className="w-20 h-20 rounded-xl object-cover bg-gray-100" />
-                        <div className="flex-1 min-w-0">
-                            <h4 className="font-bold text-gray-800 truncate">{item.name}</h4>
-                            <p className="text-sm font-bold text-orange-600 mb-2">{item.price}</p>
-                            <div className="flex gap-2">
-                                <button 
-                                    onClick={() => setEditItem(item)}
-                                    className="text-xs font-bold text-blue-600 hover:bg-blue-50 px-2 py-1 rounded transition-colors"
-                                >
-                                    Edit
-                                </button>
-                                <button 
-                                    onClick={() => handleDelete(item.id)}
-                                    className="text-xs font-bold text-red-600 hover:bg-red-50 px-2 py-1 rounded transition-colors"
-                                >
-                                    Delete
-                                </button>
-                            </div>
+            <div className="space-y-5">
+                {groupedEntries.map(([category, categoryItems]) => (
+                    <section key={category} className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-bold text-gray-700">{category}</h4>
+                            <span className="text-xs font-bold text-gray-400">{categoryItems.length} items</span>
                         </div>
-                    </div>
+                        <div className="space-y-2">
+                            {categoryItems.map((item) => (
+                                <div key={item.id} className="bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
+                                    <div className="flex gap-3">
+                                        <MenuItemImage src={item.image_url} name={item.name} />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <h4 className="font-bold text-sm text-gray-800 leading-snug break-words">{item.name}</h4>
+                                                    <p className="text-sm font-bold text-orange-600 mt-1">{formatPrice(item.price)}</p>
+                                                </div>
+                                                <span className="shrink-0 text-[10px] font-bold text-gray-600 bg-gray-100 rounded-full px-2 py-1">
+                                                    {category}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-end gap-2 mt-3">
+                                                <button
+                                                    onClick={() => setEditItem(item)}
+                                                    className="text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(item.id)}
+                                                    className="text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition-colors"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
                 ))}
+                {items.length === 0 && <p className="text-sm text-gray-500 text-center py-6">No menu items found.</p>}
             </div>
 
             {/* Modals for Add/Edit would go here - for brevity, keeping them as placeholders */}
@@ -831,6 +867,28 @@ function MenuView({ items, onUpdate, slug, onLogout }: { items: any[]; onUpdate:
                 </div>
             )}
         </div>
+    );
+}
+
+function MenuItemImage({ src, name }: { src?: string | null; name?: string }) {
+    const [hasError, setHasError] = useState(false);
+    const initial = String(name || "?").charAt(0).toUpperCase();
+
+    if (!src || hasError) {
+        return (
+            <div className="w-16 h-16 rounded-lg bg-orange-50 text-orange-600 shrink-0 flex items-center justify-center text-lg font-black">
+                {initial}
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={src}
+            alt={name || "Menu item"}
+            className="w-16 h-16 rounded-lg object-cover bg-gray-100 shrink-0"
+            onError={() => setHasError(true)}
+        />
     );
 }
 
