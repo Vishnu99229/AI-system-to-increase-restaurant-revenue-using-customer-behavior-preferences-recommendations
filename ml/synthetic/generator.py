@@ -29,6 +29,7 @@ def run_generator(days: int = SYNTHETIC_DAYS, start_date: str = START_DATE, cafe
             print("Ensuring generator-owned setup tables exist...")
             ensure_inventory_snapshots_table(cur)
             ensure_ml_output_tables(cur)
+            ensure_daily_weather_table(cur)
 
             print(f"Deleting old synthetic data for domain={cafe_slug}...")
             cleanup_existing_synthetic_data(cur, cafe_slug)
@@ -47,6 +48,7 @@ def run_generator(days: int = SYNTHETIC_DAYS, start_date: str = START_DATE, cafe
             attach_menu_ids_to_order_json(orders, menu_name_to_id)
             order_ref_to_id = insert_orders(cur, restaurant_id, orders)
             insert_order_items(cur, order_items, order_ref_to_id, menu_name_to_id)
+            insert_daily_weather(cur, cafe_slug, weather_by_day)
 
             print("Simulating inventory movement and waste...")
             snapshots, waste_logs, daily_consumption = simulate_inventory(parsed_start, days, ingredients, recipes, order_items, rng)
@@ -116,6 +118,25 @@ def ensure_ml_output_tables(cur: Any) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_purchase_recs_slug_date ON purchase_recommendations(cafe_slug, recommendation_date)")
 
 
+def ensure_daily_weather_table(cur: Any) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_weather (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            cafe_slug VARCHAR(255) NOT NULL,
+            weather_date DATE NOT NULL,
+            temperature_high NUMERIC(5,2),
+            temperature_low NUMERIC(5,2),
+            is_rain BOOLEAN DEFAULT false,
+            humidity INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(cafe_slug, weather_date)
+        )
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_weather_slug_date ON daily_weather(cafe_slug, weather_date)")
+
+
 def cleanup_existing_synthetic_data(cur: Any, cafe_slug: str) -> None:
     cur.execute("SELECT id FROM restaurants WHERE domain = %s", (cafe_slug,))
     row = cur.fetchone()
@@ -125,6 +146,7 @@ def cleanup_existing_synthetic_data(cur: Any, cafe_slug: str) -> None:
     cur.execute("DELETE FROM purchase_recommendations WHERE cafe_slug = %s", (cafe_slug,))
     cur.execute("DELETE FROM waste_log WHERE cafe_slug = %s", (cafe_slug,))
     cur.execute("DELETE FROM inventory_snapshots WHERE cafe_slug = %s", (cafe_slug,))
+    cur.execute("DELETE FROM daily_weather WHERE cafe_slug = %s", (cafe_slug,))
 
     if restaurant_id is not None:
         cur.execute("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE restaurant_id = %s)", (restaurant_id,))
@@ -303,6 +325,36 @@ def insert_order_items(
         """,
         rows,
         page_size=5000,
+    )
+
+
+def insert_daily_weather(cur: Any, cafe_slug: str, weather_by_day: dict[date, Any]) -> None:
+    rows = [
+        (
+            cafe_slug,
+            weather_day.date,
+            round(weather_day.temperature_c, 2),
+            round(weather_day.temperature_c - 5.0, 2),
+            weather_day.rain_mm > 0,
+            int(round(weather_day.humidity * 100)),
+        )
+        for weather_day in weather_by_day.values()
+    ]
+    execute_values(
+        cur,
+        """
+        INSERT INTO daily_weather (
+            cafe_slug, weather_date, temperature_high, temperature_low, is_rain, humidity
+        )
+        VALUES %s
+        ON CONFLICT (cafe_slug, weather_date) DO UPDATE SET
+            temperature_high = EXCLUDED.temperature_high,
+            temperature_low = EXCLUDED.temperature_low,
+            is_rain = EXCLUDED.is_rain,
+            humidity = EXCLUDED.humidity
+        """,
+        rows,
+        page_size=1000,
     )
 
 
