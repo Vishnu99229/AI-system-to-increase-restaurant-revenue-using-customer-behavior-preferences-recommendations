@@ -369,16 +369,24 @@ def build_live_ingredient_state(ingredient_id: str, ingredient: dict[str, Any], 
 
 
 def action_to_recommendation_quantity(action: int, ingredient_id: str, ingredient: dict[str, Any], data: dict[str, Any]) -> float:
+    min_order_quantity = float(ingredient["min_order_quantity"])
+    shelf_life_days = max(float(ingredient["shelf_life_hours"]) / 24.0, 1.0)
+    if shelf_life_days < 7.0:
+        usable_quantity = float(data["avg_daily_usage"].get(ingredient_id, 0.0)) * shelf_life_days
+        min_order_quantity = max(0.0, min(min_order_quantity, usable_quantity))
     if action == 0:
         return 0.0
     if action == 1:
-        return round(float(ingredient["min_order_quantity"]), 1)
+        demand = float(data["avg_daily_usage"].get(ingredient_id, 0.0))
+        current_stock = float(data["current_stock"].get(ingredient_id, 0.0))
+        needed = max(0.0, demand - current_stock)
+        return round(max(needed, min_order_quantity if needed > 0 else 0.0), 1)
     horizon_map = {2: 3, 3: 5, 4: 7}
     demand_key = f"ingredient_demand_{horizon_map.get(action, 3)}d"
     demand = float(data[demand_key].get(ingredient_id, data["avg_daily_usage"].get(ingredient_id, 0.0) * horizon_map.get(action, 3)))
     current_stock = float(data["current_stock"].get(ingredient_id, 0.0))
     needed = max(0.0, demand - current_stock)
-    return round(max(needed, float(ingredient["min_order_quantity"]) if needed > 0 else 0.0), 1)
+    return round(max(needed, min_order_quantity if needed > 0 else 0.0), 1)
 
 
 def heuristic_action(state: np.ndarray) -> int:

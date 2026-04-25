@@ -34,7 +34,7 @@ def train_purchase_optimizer(cafe_slug: str, db_config: dict[str, Any], num_epis
     simulator = RestaurantSimulator(cafe_slug, db_config, start_day_index=28, end_day_index=159)
 
     agents = {
-        bucket: DQNAgent(state_size=5, action_size=5, batch_size=64, epsilon_decay=0.985)
+        bucket: DQNAgent(state_size=5, action_size=5, batch_size=64, epsilon_start=0.4, epsilon_decay=0.90)
         for bucket in simulator.ingredient_ids_by_bucket
     }
     optimizer = PurchaseOptimizer(cafe_slug, db_config, agents=agents)
@@ -139,6 +139,7 @@ def evaluate_optimizer(cafe_slug: str, db_config: dict[str, Any], agents: dict[s
     total_stockouts = 0
     total_purchase = 0.0
     total_holding = 0.0
+    total_revenue = 0.0
 
     while simulator.has_next_day():
         current_day = simulator.current_date()
@@ -155,13 +156,15 @@ def evaluate_optimizer(cafe_slug: str, db_config: dict[str, Any], agents: dict[s
         total_stockouts += day_result.stockout_events
         total_purchase += day_result.purchase_cost
         total_holding += day_result.holding_cost
+        total_revenue += day_result.sales_revenue
 
-    food_cost_pct = total_purchase / max(total_purchase + total_waste, 1.0)
+    food_cost_pct = total_purchase / max(total_revenue, 1.0)
     return {
         "total_waste_cost": round(total_waste, 2),
         "stockout_events": int(total_stockouts),
         "purchase_cost": round(total_purchase, 2),
         "holding_cost": round(total_holding, 2),
+        "sales_revenue": round(total_revenue, 2),
         "reward": round(total_reward, 2),
         "food_cost_pct": round(food_cost_pct * 100, 1),
     }

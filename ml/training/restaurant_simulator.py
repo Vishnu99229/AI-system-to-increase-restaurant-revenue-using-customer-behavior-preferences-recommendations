@@ -24,6 +24,7 @@ OPTIMIZER_BUCKETS = {
     "dry_goods": {"Dry Goods", "Bakery", "Spices", "Condiments", "Packaging"},
     "beverages": {"Beverages"},
 }
+STOCKOUT_EPSILON = 0.05
 
 
 @dataclass
@@ -40,6 +41,7 @@ class DayResult:
     stockout_cost: float = 0.0
     purchase_cost: float = 0.0
     holding_cost: float = 0.0
+    sales_revenue: float = 0.0
     reward: float = 0.0
     stockout_events: int = 0
     waste_events: int = 0
@@ -74,10 +76,12 @@ class RestaurantSimulator:
         self.menu_items = self.data["menu_items"]
         self.daily_menu_sales = self.data["daily_menu_sales"]
         self.daily_ingredient_usage = self.data["daily_ingredient_usage"]
+        self.daily_sales_revenue = self.data["daily_sales_revenue"]
         self.dates = self.data["dates"]
         self.max_cost_per_unit = max((row["cost_per_unit"] for row in self.ingredients.values()), default=1.0)
         self.avg_daily_usage = calculate_average_usage(self.ingredients, self.daily_ingredient_usage)
         self.ingredient_ids_by_bucket = group_ingredients_by_bucket(self.ingredients)
+        self.debug_day_one = False
         self.reset()
 
     def reset(self) -> dict[str, list[float]]:
@@ -89,8 +93,11 @@ class RestaurantSimulator:
         initial_day = self.dates[max(0, self.start_day_index - 1)]
         for ingredient_id, ingredient in self.ingredients.items():
             avg_usage = self.avg_daily_usage.get(ingredient_id, 0.0)
-            initial_quantity = max(avg_usage * 5.0, float(ingredient["min_order_quantity"] or 1.0))
-            self._add_batch(ingredient_id, initial_quantity, initial_day)
+            shelf_life_days = self.usable_shelf_life_days(ingredient_id)
+            initial_days = min(4.0, shelf_life_days)
+            initial_quantity = max(avg_usage * initial_days, 0.0)
+            if initial_quantity > 0:
+                self._add_batch(ingredient_id, initial_quantity, initial_day)
 
         return self.get_all_bucket_states()
 
@@ -134,8 +141,11 @@ class RestaurantSimulator:
         current_day = self.current_date()
         result = DayResult(day=current_day)
 
+        if self.debug_day_one and not self.episode_results:
+            self._print_day_one_debug(actions_by_ingredient, current_day)
         self._receive_deliveries(current_day)
         result.purchase_cost += self._place_orders(actions_by_ingredient, current_day, result)
+        self._receive_deliveries(current_day)
         stockout_cost, stockout_events = self._consume_for_day(current_day)
         result.stockout_cost = stockout_cost
         result.stockout_events = stockout_events
@@ -143,7 +153,10 @@ class RestaurantSimulator:
         result.waste_cost = waste_cost
         result.waste_events = waste_events
         result.holding_cost = self._holding_cost()
+        result.sales_revenue = self.daily_sales_revenue.get(current_day, 0.0)
         result.reward = calculate_reward(result)
+        if self.debug_day_one and not self.episode_results:
+            self._print_day_one_result_debug(result)
         self.episode_results.append(result)
 
         self.current_idx += 1
@@ -153,18 +166,29 @@ class RestaurantSimulator:
 
     def action_to_quantity(self, ingredient_id: str, action: int, current_day: date) -> float:
         ingredient = self.ingredients[ingredient_id]
-        min_order_quantity = float(ingredient["min_order_quantity"] or 1.0)
+        min_order_quantity = self.order_floor(ingredient_id)
         if action == 0:
             return 0.0
         if action == 1:
-            return min_order_quantity
-        horizon = {2: 3, 3: 5, 4: 7}.get(action, 3)
+            demand = self.predicted_ingredient_usage(ingredient_id, current_day, 1)
+            available = self.get_stock(ingredient_id) + self.pending_quantity(ingredient_id, current_day, 1)
+            needed = max(demand - available, 0.0)
+            if needed <= 0:
+                return 0.0
+            return round(max(needed, min_order_quantity), 1)
+        requested_horizon = {2: 3, 3: 5, 4: 7}.get(action, 3)
+        horizon = min(requested_horizon, self.usable_shelf_life_days(ingredient_id))
         demand = self.predicted_ingredient_usage(ingredient_id, current_day, horizon)
-        return round(max(demand, min_order_quantity), 1)
+        available = self.get_stock(ingredient_id) + self.pending_quantity(ingredient_id, current_day, horizon)
+        needed = max(demand - available, 0.0)
+        if needed <= 0:
+            return 0.0
+        return round(max(needed, min_order_quantity), 1)
 
-    def predicted_ingredient_usage(self, ingredient_id: str, current_day: date, horizon_days: int) -> float:
+    def predicted_ingredient_usage(self, ingredient_id: str, current_day: date, horizon_days: float) -> float:
         total = 0.0
-        for offset in range(horizon_days):
+        whole_days = max(1, int(np.ceil(horizon_days)))
+        for offset in range(whole_days):
             day = current_day + timedelta(days=offset)
             total += self.daily_ingredient_usage.get(day, {}).get(ingredient_id, 0.0)
         if total <= 0:
@@ -173,6 +197,30 @@ class RestaurantSimulator:
 
     def get_stock(self, ingredient_id: str) -> float:
         return float(sum(batch.quantity for batch in self.inventory[ingredient_id]))
+
+    def usable_shelf_life_days(self, ingredient_id: str) -> float:
+        ingredient = self.ingredients[ingredient_id]
+        return max(float(ingredient["shelf_life_hours"]) / 24.0, 1.0)
+
+    def order_floor(self, ingredient_id: str) -> float:
+        ingredient = self.ingredients[ingredient_id]
+        min_order_quantity = float(ingredient["min_order_quantity"] or 1.0)
+        shelf_life_days = self.usable_shelf_life_days(ingredient_id)
+        if shelf_life_days < 7.0:
+            usable_quantity = self.avg_daily_usage.get(ingredient_id, 0.0) * shelf_life_days
+            return max(0.0, min(min_order_quantity, usable_quantity))
+        return min_order_quantity
+
+    def pending_quantity(self, ingredient_id: str, current_day: date, horizon_days: float | None = None) -> float:
+        horizon_end = current_day + timedelta(days=horizon_days) if horizon_days is not None else None
+        return float(
+            sum(
+                delivery["quantity"]
+                for delivery in self.pending_deliveries
+                if delivery["ingredient_id"] == ingredient_id
+                and (horizon_end is None or delivery["arrival_date"] <= horizon_end)
+            )
+        )
 
     def days_until_nearest_expiry(self, ingredient_id: str, current_day: date) -> float:
         batches = [batch for batch in self.inventory[ingredient_id] if batch.quantity > 0]
@@ -213,7 +261,7 @@ class RestaurantSimulator:
             if quantity <= 0:
                 continue
             ingredient = self.ingredients[ingredient_id]
-            lead_time_days = int(self.rng.integers(1, 3))
+            lead_time_days = 0
             self.pending_deliveries.append(
                 {
                     "ingredient_id": ingredient_id,
@@ -240,7 +288,7 @@ class RestaurantSimulator:
                 remaining -= used
                 if batch.quantity <= 0.0001:
                     batches.popleft()
-            if remaining > 0:
+            if remaining > STOCKOUT_EPSILON:
                 ingredient = self.ingredients[ingredient_id]
                 stockout_events += 1
                 stockout_cost += remaining * float(ingredient["cost_per_unit"]) * 4.0
@@ -270,19 +318,48 @@ class RestaurantSimulator:
             cost += sum(batch.quantity for batch in batches) * float(ingredient["cost_per_unit"]) * 0.001
         return round(cost, 2)
 
+    def _debug_sample_ingredient_ids(self) -> list[str]:
+        active_ids = [ingredient_id for ingredient_id, usage in self.avg_daily_usage.items() if usage > 0]
+        return active_ids[:5] or list(self.ingredients)[:5]
+
+    def _print_day_one_debug(self, actions_by_ingredient: dict[str, int], current_day: date) -> None:
+        print("\n=== Simulator day-one scaling debug ===")
+        for ingredient_id in self._debug_sample_ingredient_ids():
+            ingredient = self.ingredients[ingredient_id]
+            action_quantities = {
+                action: self.action_to_quantity(ingredient_id, action, current_day)
+                for action in range(5)
+            }
+            print(
+                f"{ingredient['name']} | initial={self.get_stock(ingredient_id):.3f} {ingredient['unit']} | "
+                f"avg_daily_usage={self.avg_daily_usage.get(ingredient_id, 0.0):.3f} | "
+                f"day_usage={self.daily_ingredient_usage.get(current_day, {}).get(ingredient_id, 0.0):.3f} | "
+                f"actions={action_quantities} | selected={actions_by_ingredient.get(ingredient_id, 0)}"
+            )
+
+    def _print_day_one_result_debug(self, result: DayResult) -> None:
+        print(
+            "Day-one result | "
+            f"waste=INR {result.waste_cost:.2f} | "
+            f"stockout_cost=INR {result.stockout_cost:.2f} | "
+            f"purchase=INR {result.purchase_cost:.2f} | "
+            f"revenue=INR {result.sales_revenue:.2f} | "
+            f"reward={result.reward:.4f}"
+        )
+
 
 def calculate_reward(day_result: DayResult) -> float:
     reward = -(
         day_result.waste_cost * 3.0
         + day_result.stockout_cost * 2.0
+        + day_result.purchase_cost * 0.1
         + day_result.holding_cost * 0.5
     )
-    if day_result.purchase_cost > 0:
-        operational_cost = day_result.purchase_cost + day_result.waste_cost
-        food_cost_pct = day_result.purchase_cost / max(operational_cost, 1.0)
+    if day_result.purchase_cost > 0 and day_result.sales_revenue > 0:
+        food_cost_pct = day_result.purchase_cost / day_result.sales_revenue
         if 0.28 <= food_cost_pct <= 0.35:
-            reward += 50.0
-    return round(float(reward), 4)
+            reward += 500.0
+    return round(float(reward) / 1000.0, 4)
 
 
 def load_simulation_data(cafe_slug: str, db_config: dict[str, Any]) -> dict[str, Any]:
@@ -394,6 +471,13 @@ def load_simulation_data(cafe_slug: str, db_config: dict[str, Any]) -> dict[str,
         sale_day: {ingredient_id: round(quantity, 4) for ingredient_id, quantity in usage.items()}
         for sale_day, usage in daily_ingredient_usage.items()
     }
+    daily_sales_revenue = {
+        sale_day: round(
+            sum(units_sold * menu_items[menu_item_id]["price"] for menu_item_id, units_sold in menu_sales.items()),
+            2,
+        )
+        for sale_day, menu_sales in daily_menu_sales.items()
+    }
 
     return {
         "ingredients": ingredients,
@@ -401,6 +485,7 @@ def load_simulation_data(cafe_slug: str, db_config: dict[str, Any]) -> dict[str,
         "menu_items": menu_items,
         "daily_menu_sales": daily_menu_sales,
         "daily_ingredient_usage": daily_ingredient_usage,
+        "daily_sales_revenue": daily_sales_revenue,
         "dates": dates,
     }
 
