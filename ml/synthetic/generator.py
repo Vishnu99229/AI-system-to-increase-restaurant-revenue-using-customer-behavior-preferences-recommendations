@@ -138,19 +138,13 @@ def cleanup_existing_synthetic_data(cur: Any, cafe_slug: str) -> None:
 
 
 def create_restaurant(cur: Any, cafe_slug: str) -> int:
-    config = {
-        "theme": "bangalore-neighbourhood-cafe",
-        "currency": "INR",
-        "timezone": "Asia/Kolkata",
-        "synthetic": True,
-    }
     cur.execute(
         """
-        INSERT INTO restaurants (name, slug, domain, whatsapp_number, max_tables, config)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO restaurants (name, domain)
+        VALUES (%s, %s)
         RETURNING id
         """,
-        ("Synthetic Bangalore Cafe", cafe_slug, cafe_slug, "+919000000000", 15, json.dumps(config)),
+        ("Synthetic Bangalore Cafe", cafe_slug),
     )
     return int(cur.fetchone()[0])
 
