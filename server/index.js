@@ -210,6 +210,20 @@ const pool = new Pool({
             )
         `);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_daily_weather_slug_date ON daily_weather(cafe_slug, weather_date)`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS inventory_alerts (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cafe_slug VARCHAR(255) NOT NULL,
+                ingredient_id UUID REFERENCES ingredients(id) ON DELETE CASCADE,
+                alert_type VARCHAR(50) NOT NULL,
+                alert_date DATE NOT NULL,
+                message TEXT,
+                menu_items_to_push INTEGER[],
+                resolved BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_alerts_slug_date ON inventory_alerts(cafe_slug, alert_date)`);
 
         const existingOrderItemsResult = await pool.query("SELECT COUNT(*)::int AS count FROM order_items");
         const existingOrderItemsCount = existingOrderItemsResult.rows[0]?.count || 0;

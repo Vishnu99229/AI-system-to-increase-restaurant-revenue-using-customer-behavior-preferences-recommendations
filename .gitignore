@@ -3,6 +3,7 @@ logs
 *.log
 __pycache__/
 *.pyc
+ml/venv/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
