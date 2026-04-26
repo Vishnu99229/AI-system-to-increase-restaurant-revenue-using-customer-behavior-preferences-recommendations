@@ -77,6 +77,7 @@ function AppContent() {
                         localStorage.removeItem(countKey);
                         localStorage.removeItem(lastVisitKey);
                         localStorage.removeItem(`${restaurant}_session_orders`);
+                        localStorage.removeItem(`${restaurant}_chat_messages`);
                     }
                 }
             } catch (err) {

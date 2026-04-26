@@ -205,6 +205,38 @@ function getPriceValue(priceStr?: string) {
     return parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
 }
 
+function saveChatMessages(restaurantId: string, messages: MenuChatMessage[]): void {
+    try {
+        const key = `${restaurantId}_chat_messages`;
+        localStorage.setItem(key, JSON.stringify(messages));
+    } catch (err) {
+        console.warn("[ChatAgent] Failed to save chat messages:", err);
+    }
+}
+
+function loadChatMessages(restaurantId: string): MenuChatMessage[] | null {
+    try {
+        const key = `${restaurantId}_chat_messages`;
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || parsed.length === 0) return null;
+        return parsed as MenuChatMessage[];
+    } catch (err) {
+        console.warn("[ChatAgent] Failed to load chat messages:", err);
+        clearChatMessages(restaurantId);
+        return null;
+    }
+}
+
+function clearChatMessages(restaurantId: string): void {
+    try {
+        localStorage.removeItem(`${restaurantId}_chat_messages`);
+    } catch (err) {
+        // ignore
+    }
+}
+
 // --- Diet-dot color by tags ---
 function getDietDot(tags?: string[]): { color: string; label: string } | null {
     if (!tags || tags.length === 0) return null;
@@ -598,15 +630,27 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setShowSheetContent(false);
         setShowInitialTyping(false);
         setShowQuickReplies(false);
-        setMessages([]);
         setChatInput("");
         setChatLoading(false);
 
+        const savedMessages = loadChatMessages(state.restaurantId);
+
+        if (savedMessages && savedMessages.length > 0) {
+            setMessages(savedMessages);
+            const avatarTimer = window.setTimeout(() => setShowSheetContent(true), 200);
+            return () => {
+                window.clearTimeout(avatarTimer);
+            };
+        }
+
+        setMessages([]);
         const avatarTimer = window.setTimeout(() => setShowSheetContent(true), 400);
         const typingTimer = window.setTimeout(() => setShowInitialTyping(true), 600);
         const greetingTimer = window.setTimeout(() => {
             setShowInitialTyping(false);
-            setMessages([{ role: "assistant", content: CHAT_OPENING_TEXT }]);
+            const greeting: MenuChatMessage = { role: "assistant", content: CHAT_OPENING_TEXT };
+            setMessages([greeting]);
+            saveChatMessages(state.restaurantId, [greeting]);
         }, 1400);
         const chipTimer = window.setTimeout(() => setShowQuickReplies(true), 1800);
 
@@ -616,7 +660,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             window.clearTimeout(greetingTimer);
             window.clearTimeout(chipTimer);
         };
-    }, [sheetOpen]);
+    }, [sheetOpen, state.restaurantId]);
 
     const closeChatSheet = () => {
         setSheetClosing(true);
@@ -625,7 +669,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
             setSheetClosing(false);
             setShowQuickReplies(false);
             setShowInitialTyping(false);
-            setMessages([]);
             setChatInput("");
             setChatLoading(false);
             setActiveChip(null);
@@ -638,7 +681,11 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     };
 
     const addAgentMessage = (content: string) => {
-        setMessages((prev) => [...prev, { role: "assistant", content }]);
+        setMessages((prev) => {
+            const updated = [...prev, { role: "assistant" as const, content }];
+            saveChatMessages(state.restaurantId, updated);
+            return updated;
+        });
     };
 
     const handlePlaceOrderFromChat = async (orderItems: ChatOrderLine[]) => {
@@ -682,6 +729,27 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                     state.customerPhone || ""
                 );
 
+                try {
+                    const sessionOrdersKey = `${state.restaurantId}_session_orders`;
+                    const existingRaw = localStorage.getItem(sessionOrdersKey);
+                    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+                    existing.unshift({
+                        id: orderId,
+                        placedAt: new Date().toISOString(),
+                        tableNumber: state.tableNumber,
+                        items: orderItems.map(order => ({
+                            name: order.item.name,
+                            price: Math.round(getPriceValue(order.item.price)),
+                            qty: order.quantity
+                        })),
+                        total: Math.round(orderTotal)
+                    });
+                    localStorage.setItem(sessionOrdersKey, JSON.stringify(existing));
+                    setSessionOrders(existing);
+                } catch (err) {
+                    console.warn("[ChatAgent] Failed to save session order:", err);
+                }
+
                 addAgentMessage(
                     `Done! Your order for ${formatOrderList(orderItems)}` +
                     ` has been placed for Table ${state.tableNumber}. ` +
@@ -718,6 +786,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         const userMessage: MenuChatMessage = { role: "user", content: text };
         const nextMessages = [...baseHistory, userMessage];
         setMessages(nextMessages);
+        saveChatMessages(state.restaurantId, nextMessages);
         setChatInput("");
         setShowQuickReplies(false);
 
@@ -767,13 +836,21 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                 role: "assistant",
                 content: data.reply
             };
-            setMessages((prev) => [...prev, assistantMessage]);
+            setMessages((prev) => {
+                const updated = [...prev, assistantMessage];
+                saveChatMessages(state.restaurantId, updated);
+                return updated;
+            });
         } catch (err) {
             console.error("Menu chat failed:", err);
-            setMessages((prev) => [
-                ...prev,
-                { role: "assistant", content: "Hmm, something went wrong. Try asking again?" }
-            ]);
+            setMessages((prev) => {
+                const updated = [
+                    ...prev,
+                    { role: "assistant" as const, content: "Hmm, something went wrong. Try asking again?" }
+                ];
+                saveChatMessages(state.restaurantId, updated);
+                return updated;
+            });
         } finally {
             setChatLoading(false);
         }
