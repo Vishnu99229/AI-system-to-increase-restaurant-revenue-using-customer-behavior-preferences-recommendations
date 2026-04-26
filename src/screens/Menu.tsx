@@ -724,7 +724,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                         price: getPriceValue(order.item.price),
                         specialInstructions: order.specialInstructions || undefined
                     })),
-                    state.tableNumber,
+                    state.tableNumber || "",
                     customerName,
                     state.customerPhone || ""
                 );
@@ -736,7 +736,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                     existing.unshift({
                         id: orderId,
                         placedAt: new Date().toISOString(),
-                        tableNumber: state.tableNumber,
+                        tableNumber: state.tableNumber || "",
                         items: orderItems.map(order => ({
                             name: order.item.name,
                             price: Math.round(getPriceValue(order.item.price)),
@@ -752,7 +752,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
                 addAgentMessage(
                     `Done! Your order for ${formatOrderList(orderItems)}` +
-                    ` has been placed for Table ${state.tableNumber}. ` +
+                    ` has been placed${state.tableNumber ? ` for Table ${state.tableNumber}` : ""}. ` +
                     `Total: ₹${Math.round(orderTotal)}. ` +
                     `The kitchen has been notified. Anything else?`
                 );
@@ -810,7 +810,26 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         }
 
         if (detectOrderIntent(text)) {
-            const recentContext = baseHistory.slice(-4).map(message => message.content).join(" ");
+            const recentContext = baseHistory
+                .slice(-6)
+                .filter(message => {
+                    if (message.role === "assistant") {
+                        const lower = message.content.toLowerCase();
+                        if (
+                            lower.includes("done! your order") ||
+                            lower.includes("has been placed") ||
+                            lower.includes("shall i place") ||
+                            lower.includes("added to your cart") ||
+                            lower.includes("i have added") ||
+                            lower.includes("kitchen has been notified")
+                        ) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
+                .map(message => message.content)
+                .join(" ");
             const { items: parsedOrderItems } = parseOrderFromMessage(
                 text,
                 items,
