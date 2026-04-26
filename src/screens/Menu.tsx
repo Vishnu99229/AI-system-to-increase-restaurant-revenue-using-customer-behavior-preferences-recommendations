@@ -68,6 +68,12 @@ const DEFAULT_TAB = "Drinks";
 const CHAT_OPENING_TEXT = "Hey! I know this menu well. Ask me anything -- what's good, what's popular, what goes well together.";
 const QUICK_REPLIES: string[] = ["What's popular? 🔥", "Something cold 🧊", "Surprise me ✨"];
 
+type ChatOrderLine = {
+    item: Item;
+    quantity: number;
+    specialInstructions: string;
+};
+
 function detectOrderIntent(message: string): boolean {
     const lower = message.toLowerCase();
     const ORDER_SIGNALS = [
@@ -87,16 +93,41 @@ function detectOrderIntent(message: string): boolean {
     return ORDER_SIGNALS.some(signal => lower.includes(signal));
 }
 
-function parseOrderFromMessage(message: string, menuItems: Item[]): {
-    item: Item | null;
-    quantity: number;
-    specialInstructions: string;
+function parseOrderFromMessage(message: string, menuItems: Item[], context: string = ""): {
+    items: ChatOrderLine[];
 } {
     const lower = message.toLowerCase();
+    const contextLower = context.toLowerCase();
+    const combinedLower = `${contextLower} ${lower}`;
+    const MULTI_ITEM_SIGNALS = [
+        "both",
+        "all",
+        "everything",
+        "all three",
+        "place everything",
+        "order everything",
+        "add both",
+        "order both",
+        "yes to both"
+    ];
+    const wantsMultipleItems = MULTI_ITEM_SIGNALS.some(signal => lower.includes(signal));
 
-    const matchedItem = menuItems.find(item =>
-        lower.includes(item.name.toLowerCase())
-    ) || null;
+    const findMatches = (source: string) => menuItems.filter(item =>
+        source.includes(item.name.toLowerCase())
+    );
+
+    const messageMatches = findMatches(lower);
+    const contextMatches = findMatches(contextLower);
+    const combinedMatches = findMatches(combinedLower);
+
+    let matchedItems: Item[] = [];
+    if (wantsMultipleItems) {
+        matchedItems = combinedMatches;
+    } else if (messageMatches.length > 0) {
+        matchedItems = messageMatches;
+    } else if (contextMatches.length === 1) {
+        matchedItems = contextMatches;
+    }
 
     const quantityMatch = message.match(/\b([1-9])\b/);
     const quantity = quantityMatch ? parseInt(quantityMatch[1], 10) : 1;
@@ -108,20 +139,57 @@ function parseOrderFromMessage(message: string, menuItems: Item[]): {
         ? instructionMatch[1].trim()
         : "";
 
-    return { item: matchedItem, quantity, specialInstructions };
+    return {
+        items: matchedItems.map(item => ({
+            item,
+            quantity,
+            specialInstructions
+        }))
+    };
 }
 
-function buildConfirmationMessage(
-    item: Item,
-    quantity: number,
-    specialInstructions: string
-): string {
-    const quantityStr = quantity === 1 ? "1" : quantity.toString();
-    const itemTotal = getPriceValue(item.price) * quantity;
-    let message = `Shall I place an order for ${quantityStr} x ${item.name} (₹${Math.round(itemTotal)})?`;
-    if (specialInstructions) {
-        message += ` With the note: "${specialInstructions}".`;
+function formatOrderLine(order: ChatOrderLine): string {
+    return `${order.quantity} x ${order.item.name}`;
+}
+
+function formatOrderList(orderItems: ChatOrderLine[]): string {
+    if (orderItems.length === 0) return "";
+    if (orderItems.length === 1) return formatOrderLine(orderItems[0]);
+    if (orderItems.length === 2) {
+        return `${formatOrderLine(orderItems[0])} and ${formatOrderLine(orderItems[1])}`;
     }
+    const firstItems = orderItems.slice(0, -1).map(formatOrderLine).join(", ");
+    return `${firstItems}, and ${formatOrderLine(orderItems[orderItems.length - 1])}`;
+}
+
+function getOrderTotal(orderItems: ChatOrderLine[]): number {
+    return orderItems.reduce((total, order) => total + getPriceValue(order.item.price) * order.quantity, 0);
+}
+
+function buildConfirmationMessage(orderItems: ChatOrderLine[]): string {
+    const itemDetails = orderItems.map(order => {
+        const itemTotal = getPriceValue(order.item.price) * order.quantity;
+        return `${formatOrderLine(order)} (₹${Math.round(itemTotal)})`;
+    });
+    const itemList = itemDetails.length === 2
+        ? `${itemDetails[0]} and ${itemDetails[1]}`
+        : itemDetails.length > 2
+            ? `${itemDetails.slice(0, -1).join(", ")}, and ${itemDetails[itemDetails.length - 1]}`
+            : itemDetails[0];
+    const note = orderItems.find(order => order.specialInstructions)?.specialInstructions;
+    const total = Math.round(getOrderTotal(orderItems));
+    let message = `Shall I place an order for ${itemList}? Total: ₹${total}`;
+    if (note) {
+        message += ` With the note: "${note}".`;
+    }
+    return message;
+}
+
+function buildAddedToCartMessage(orderItems: ChatOrderLine[]): string {
+    const total = Math.round(getOrderTotal(orderItems));
+    let message = `I have added ${formatOrderList(orderItems)} to your cart. Total: ₹${total}. `;
+    message += "Please tap the cart icon to checkout and verify your phone number ";
+    message += "to confirm the order. After that, I can place future orders directly for you!";
     return message;
 }
 
@@ -254,11 +322,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [messages, setMessages] = useState<MenuChatMessage[]>([]);
     const [chatInput, setChatInput] = useState("");
     const [chatLoading, setChatLoading] = useState(false);
-    const [pendingOrder, setPendingOrder] = useState<{
-        item: Item;
-        quantity: number;
-        specialInstructions: string;
-    } | null>(null);
+    const [pendingOrder, setPendingOrder] = useState<ChatOrderLine[] | null>(null);
     const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
     const [activeChip, setActiveChip] = useState<string | null>(null);
@@ -577,11 +641,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setMessages((prev) => [...prev, { role: "assistant", content }]);
     };
 
-    const handlePlaceOrderFromChat = async (order: {
-        item: Item;
-        quantity: number;
-        specialInstructions: string;
-    }) => {
+    const handlePlaceOrderFromChat = async (orderItems: ChatOrderLine[]) => {
         if (isPlacingOrder) return;
         setIsPlacingOrder(true);
         setChatLoading(true);
@@ -602,42 +662,40 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
             if (isReturningCustomer) {
                 const orderId = Date.now().toString();
-                const itemTotal = getPriceValue(order.item.price) * order.quantity;
+                const orderTotal = getOrderTotal(orderItems);
 
                 await trackOrderComplete(
                     state.restaurantId,
                     orderId,
-                    itemTotal,
+                    orderTotal,
                     false,
                     0,
-                    [{
+                    orderItems.map(order => ({
                         menu_item_id: order.item.id,
                         name: order.item.name,
                         quantity: order.quantity,
                         price: getPriceValue(order.item.price),
                         specialInstructions: order.specialInstructions || undefined
-                    }],
+                    })),
                     state.tableNumber,
                     customerName,
                     state.customerPhone || ""
                 );
 
                 addAgentMessage(
-                    `Done! Your order for ${order.quantity} x ${order.item.name}` +
+                    `Done! Your order for ${formatOrderList(orderItems)}` +
                     ` has been placed for Table ${state.tableNumber}. ` +
+                    `Total: ₹${Math.round(orderTotal)}. ` +
                     `The kitchen has been notified. Anything else?`
                 );
             } else {
-                for (let i = 0; i < order.quantity; i++) {
-                    dispatch({ type: "ADD_TO_CART", payload: order.item });
-                }
+                orderItems.forEach(order => {
+                    for (let i = 0; i < order.quantity; i++) {
+                        dispatch({ type: "ADD_TO_CART", payload: order.item });
+                    }
+                });
 
-                addAgentMessage(
-                    `I have added ${order.quantity} x ${order.item.name} to your cart. ` +
-                    `Please tap the cart icon to checkout and verify your phone number ` +
-                    `to confirm the order. After that, I can place future orders ` +
-                    `directly for you!`
-                );
+                addAgentMessage(buildAddedToCartMessage(orderItems));
             }
         } catch (err) {
             console.error("[ChatAgent] Order placement failed:", err);
@@ -684,19 +742,20 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
         if (detectOrderIntent(text)) {
             const recentContext = baseHistory.slice(-4).map(message => message.content).join(" ");
-            const { item, quantity, specialInstructions } = parseOrderFromMessage(
-                `${recentContext} ${text}`,
-                items
+            const { items: parsedOrderItems } = parseOrderFromMessage(
+                text,
+                items,
+                recentContext
             );
 
-            if (!item) {
+            if (parsedOrderItems.length === 0) {
                 addAgentMessage("I would love to place that order for you. Which item would you like to order?");
                 return;
             }
 
-            setPendingOrder({ item, quantity, specialInstructions });
+            setPendingOrder(parsedOrderItems);
             setAwaitingConfirmation(true);
-            addAgentMessage(buildConfirmationMessage(item, quantity, specialInstructions));
+            addAgentMessage(buildConfirmationMessage(parsedOrderItems));
             return;
         }
 
