@@ -66,7 +66,7 @@ export async function trackOrderComplete(
     totalValue: number,
     upsellAccepted: boolean,
     upsellValue: number = 0,
-    items: { menu_item_id: number; name: string; quantity: number; price: number; is_upsell?: boolean }[] = [],
+    items: { menu_item_id: number; name: string; quantity: number; price: number; is_upsell?: boolean; specialInstructions?: string }[] = [],
     tableNumber: string = "",
     customerName: string = "",
     customerPhone: string = ""

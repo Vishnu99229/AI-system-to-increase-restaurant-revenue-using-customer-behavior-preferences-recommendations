@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { fetchMenu, trackUpsellShown } from "../utils/api";
-import { chatWithMenuAssistant } from "../utils/api";
+import { chatWithMenuAssistant, fetchMenu, trackOrderComplete, trackUpsellShown } from "../utils/api";
 import { rankCandidatesAI } from "../utils/recommendations";
 import type { Item } from "../utils/recommendations";
 import type { MenuChatMessage } from "../utils/api";
@@ -68,6 +67,75 @@ const TAB_NAMES = Object.keys(TAB_GROUPS);
 const DEFAULT_TAB = "Drinks";
 const CHAT_OPENING_TEXT = "Hey! I know this menu well. Ask me anything -- what's good, what's popular, what goes well together.";
 const QUICK_REPLIES: string[] = ["What's popular? 🔥", "Something cold 🧊", "Surprise me ✨"];
+
+function detectOrderIntent(message: string): boolean {
+    const lower = message.toLowerCase();
+    const ORDER_SIGNALS = [
+        "place the order",
+        "place order",
+        "order for me",
+        "add to cart",
+        "i want to order",
+        "can you order",
+        "go ahead and order",
+        "yes place",
+        "confirm the order",
+        "order it",
+        "order a",
+        "order an"
+    ];
+    return ORDER_SIGNALS.some(signal => lower.includes(signal));
+}
+
+function parseOrderFromMessage(message: string, menuItems: Item[]): {
+    item: Item | null;
+    quantity: number;
+    specialInstructions: string;
+} {
+    const lower = message.toLowerCase();
+
+    const matchedItem = menuItems.find(item =>
+        lower.includes(item.name.toLowerCase())
+    ) || null;
+
+    const quantityMatch = message.match(/\b([1-9])\b/);
+    const quantity = quantityMatch ? parseInt(quantityMatch[1], 10) : 1;
+
+    const instructionMatch = message.match(
+        /(?:no|without|extra|less|add|remove|please)\s+(.+)/i
+    );
+    const specialInstructions = instructionMatch
+        ? instructionMatch[1].trim()
+        : "";
+
+    return { item: matchedItem, quantity, specialInstructions };
+}
+
+function buildConfirmationMessage(
+    item: Item,
+    quantity: number,
+    specialInstructions: string
+): string {
+    const quantityStr = quantity === 1 ? "1" : quantity.toString();
+    const itemTotal = getPriceValue(item.price) * quantity;
+    let message = `Shall I place an order for ${quantityStr} x ${item.name} (₹${Math.round(itemTotal)})?`;
+    if (specialInstructions) {
+        message += ` With the note: "${specialInstructions}".`;
+    }
+    return message;
+}
+
+function getVisitTime(lastVisit: string): number {
+    const timestamp = Number(lastVisit);
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+
+    const parsedDate = new Date(lastVisit).getTime();
+    return Number.isNaN(parsedDate) ? 0 : parsedDate;
+}
+
+function getPriceValue(priceStr?: string) {
+    return parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
+}
 
 // --- Diet-dot color by tags ---
 function getDietDot(tags?: string[]): { color: string; label: string } | null {
@@ -186,6 +254,13 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [messages, setMessages] = useState<MenuChatMessage[]>([]);
     const [chatInput, setChatInput] = useState("");
     const [chatLoading, setChatLoading] = useState(false);
+    const [pendingOrder, setPendingOrder] = useState<{
+        item: Item;
+        quantity: number;
+        specialInstructions: string;
+    } | null>(null);
+    const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
+    const [isPlacingOrder, setIsPlacingOrder] = useState(false);
     const [activeChip, setActiveChip] = useState<string | null>(null);
     const [keyboardInset, setKeyboardInset] = useState(0);
 
@@ -498,17 +573,134 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setSheetOpen(true);
     };
 
+    const addAgentMessage = (content: string) => {
+        setMessages((prev) => [...prev, { role: "assistant", content }]);
+    };
+
+    const handlePlaceOrderFromChat = async (order: {
+        item: Item;
+        quantity: number;
+        specialInstructions: string;
+    }) => {
+        if (isPlacingOrder) return;
+        setIsPlacingOrder(true);
+        setChatLoading(true);
+
+        try {
+            const visitorNameKey = `${state.restaurantId}_visitor_name`;
+            const lastVisitKey = `${state.restaurantId}_last_visit`;
+            const storedName = localStorage.getItem(visitorNameKey);
+            const lastVisit = localStorage.getItem(lastVisitKey);
+            const SIX_HOURS = 6 * 60 * 60 * 1000;
+            const lastVisitTime = lastVisit ? getVisitTime(lastVisit) : 0;
+            const customerName = storedName?.trim() || "";
+            const isReturningCustomer =
+                customerName.length >= 2 &&
+                customerName.length <= 30 &&
+                lastVisitTime > 0 &&
+                Date.now() - lastVisitTime < SIX_HOURS;
+
+            if (isReturningCustomer) {
+                const orderId = Date.now().toString();
+                const itemTotal = getPriceValue(order.item.price) * order.quantity;
+
+                await trackOrderComplete(
+                    state.restaurantId,
+                    orderId,
+                    itemTotal,
+                    false,
+                    0,
+                    [{
+                        menu_item_id: order.item.id,
+                        name: order.item.name,
+                        quantity: order.quantity,
+                        price: getPriceValue(order.item.price),
+                        specialInstructions: order.specialInstructions || undefined
+                    }],
+                    state.tableNumber,
+                    customerName,
+                    state.customerPhone || ""
+                );
+
+                addAgentMessage(
+                    `Done! Your order for ${order.quantity} x ${order.item.name}` +
+                    ` has been placed for Table ${state.tableNumber}. ` +
+                    `The kitchen has been notified. Anything else?`
+                );
+            } else {
+                for (let i = 0; i < order.quantity; i++) {
+                    dispatch({ type: "ADD_TO_CART", payload: order.item });
+                }
+
+                addAgentMessage(
+                    `I have added ${order.quantity} x ${order.item.name} to your cart. ` +
+                    `Please tap the cart icon to checkout and verify your phone number ` +
+                    `to confirm the order. After that, I can place future orders ` +
+                    `directly for you!`
+                );
+            }
+        } catch (err) {
+            console.error("[ChatAgent] Order placement failed:", err);
+            addAgentMessage(
+                "I am sorry, I had trouble placing that order. " +
+                "Please use the cart to place your order, or let a staff member know."
+            );
+        } finally {
+            setChatLoading(false);
+            setIsPlacingOrder(false);
+            setPendingOrder(null);
+        }
+    };
+
     const sendChatMessage = async (rawText: string) => {
         const text = rawText.trim();
-        if (!text || chatLoading || !state.restaurantId) return;
+        if (!text || chatLoading || isPlacingOrder || !state.restaurantId) return;
 
         const baseHistory = messages;
         const userMessage: MenuChatMessage = { role: "user", content: text };
         const nextMessages = [...baseHistory, userMessage];
         setMessages(nextMessages);
         setChatInput("");
-        setChatLoading(true);
         setShowQuickReplies(false);
+
+        if (awaitingConfirmation && pendingOrder) {
+            const lower = text.toLowerCase().trim();
+            const YES_SIGNALS = ["yes", "yeah", "yep", "go ahead", "confirm", "place it", "do it", "sure", "ok", "okay", "correct"];
+            const NO_SIGNALS = ["no", "nope", "cancel", "don't", "stop", "nevermind", "never mind", "actually no"];
+
+            if (YES_SIGNALS.some(signal => lower.includes(signal))) {
+                setAwaitingConfirmation(false);
+                await handlePlaceOrderFromChat(pendingOrder);
+                return;
+            }
+
+            if (NO_SIGNALS.some(signal => lower.includes(signal))) {
+                setAwaitingConfirmation(false);
+                setPendingOrder(null);
+                addAgentMessage("No problem, I have cancelled that. Is there anything else I can help you with?");
+                return;
+            }
+        }
+
+        if (detectOrderIntent(text)) {
+            const recentContext = baseHistory.slice(-4).map(message => message.content).join(" ");
+            const { item, quantity, specialInstructions } = parseOrderFromMessage(
+                `${recentContext} ${text}`,
+                items
+            );
+
+            if (!item) {
+                addAgentMessage("I would love to place that order for you. Which item would you like to order?");
+                return;
+            }
+
+            setPendingOrder({ item, quantity, specialInstructions });
+            setAwaitingConfirmation(true);
+            addAgentMessage(buildConfirmationMessage(item, quantity, specialInstructions));
+            return;
+        }
+
+        setChatLoading(true);
 
         try {
             const data = await chatWithMenuAssistant(state.restaurantId, text, nextMessages);
