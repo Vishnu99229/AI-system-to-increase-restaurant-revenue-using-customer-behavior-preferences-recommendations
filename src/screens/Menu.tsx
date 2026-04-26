@@ -707,27 +707,55 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                 lastVisitTime > 0 &&
                 Date.now() - lastVisitTime < SIX_HOURS;
 
+            console.log("[ChatAgent] Order attempt:", {
+                isReturningCustomer,
+                customerName,
+                lastVisitTime,
+                timeSinceVisit: Date.now() - lastVisitTime,
+                tableNumber: state.tableNumber,
+                restaurantId: state.restaurantId,
+                itemCount: orderItems.length,
+                items: orderItems.map(order => order.item.name)
+            });
+
             if (isReturningCustomer) {
                 const orderId = Date.now().toString();
                 const orderTotal = getOrderTotal(orderItems);
 
-                await trackOrderComplete(
-                    state.restaurantId,
+                console.log("[ChatAgent] Calling trackOrderComplete:", {
+                    slug: state.restaurantId,
                     orderId,
                     orderTotal,
-                    false,
-                    0,
-                    orderItems.map(order => ({
-                        menu_item_id: order.item.id,
-                        name: order.item.name,
-                        quantity: order.quantity,
-                        price: getPriceValue(order.item.price),
-                        specialInstructions: order.specialInstructions || undefined
-                    })),
-                    state.tableNumber || "",
-                    customerName,
-                    state.customerPhone || ""
-                );
+                    tableNumber: state.tableNumber
+                });
+
+                try {
+                    await trackOrderComplete(
+                        state.restaurantId,
+                        orderId,
+                        orderTotal,
+                        false,
+                        0,
+                        orderItems.map(order => ({
+                            menu_item_id: order.item.id,
+                            name: order.item.name,
+                            quantity: order.quantity,
+                            price: Math.round(getPriceValue(order.item.price)),
+                            specialInstructions: order.specialInstructions || undefined
+                        })),
+                        state.tableNumber || "",
+                        customerName,
+                        state.customerPhone || ""
+                    );
+                    console.log("[ChatAgent] trackOrderComplete succeeded");
+                } catch (apiErr: any) {
+                    console.error("[ChatAgent] trackOrderComplete FAILED:", apiErr?.message || apiErr);
+                    addAgentMessage(
+                        "I tried to place the order but something went wrong on my end. " +
+                        "Please use the cart to place your order, or let a staff member know."
+                    );
+                    return;
+                }
 
                 try {
                     const sessionOrdersKey = `${state.restaurantId}_session_orders`;
@@ -757,6 +785,7 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
                     `The kitchen has been notified. Anything else?`
                 );
             } else {
+                console.log("[ChatAgent] Not returning customer, adding to cart instead");
                 orderItems.forEach(order => {
                     for (let i = 0; i < order.quantity; i++) {
                         dispatch({ type: "ADD_TO_CART", payload: order.item });
@@ -765,10 +794,10 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
 
                 addAgentMessage(buildAddedToCartMessage(orderItems));
             }
-        } catch (err) {
-            console.error("[ChatAgent] Order placement failed:", err);
+        } catch (err: any) {
+            console.error("[ChatAgent] Order placement failed:", err?.message || err);
             addAgentMessage(
-                "I am sorry, I had trouble placing that order. " +
+                "I had trouble placing that order. " +
                 "Please use the cart to place your order, or let a staff member know."
             );
         } finally {
@@ -810,26 +839,11 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         }
 
         if (detectOrderIntent(text)) {
-            const recentContext = baseHistory
-                .slice(-6)
-                .filter(message => {
-                    if (message.role === "assistant") {
-                        const lower = message.content.toLowerCase();
-                        if (
-                            lower.includes("done! your order") ||
-                            lower.includes("has been placed") ||
-                            lower.includes("shall i place") ||
-                            lower.includes("added to your cart") ||
-                            lower.includes("i have added") ||
-                            lower.includes("kitchen has been notified")
-                        ) {
-                            return false;
-                        }
-                    }
-                    return true;
-                })
-                .map(message => message.content)
-                .join(" ");
+            const lastUserMessage = baseHistory
+                .slice()
+                .reverse()
+                .find(message => message.role === "user");
+            const recentContext = lastUserMessage ? lastUserMessage.content : "";
             const { items: parsedOrderItems } = parseOrderFromMessage(
                 text,
                 items,
