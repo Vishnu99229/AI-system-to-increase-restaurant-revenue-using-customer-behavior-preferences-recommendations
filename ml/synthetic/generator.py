@@ -10,15 +10,26 @@ import psycopg2
 from dateutil.parser import isoparse
 from psycopg2.extras import execute_values
 
-from config import DB_CONFIG, RANDOM_SEED, START_DATE, SYNTHETIC_CAFE_SLUG, SYNTHETIC_DAYS
+from config import CITIES, DB_CONFIG, RANDOM_SEED, START_DATE, SYNTHETIC_CAFE_SLUG, SYNTHETIC_DAYS
 from synthetic.demand_simulator import simulate_demand
 from synthetic.inventory_simulator import simulate_inventory
 from synthetic.menu_factory import build_menu_and_ingredients
 
 
-def run_generator(days: int = SYNTHETIC_DAYS, start_date: str = START_DATE, cafe_slug: str = SYNTHETIC_CAFE_SLUG, seed: int = RANDOM_SEED) -> None:
+def run_generator(
+    days: int = SYNTHETIC_DAYS,
+    start_date: str = START_DATE,
+    cafe_slug: str | None = None,
+    seed: int = RANDOM_SEED,
+    city: str = "bangalore",
+) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     parsed_start = isoparse(start_date).date()
+    city_key = city.lower()
+    if city_key not in CITIES:
+        raise ValueError(f"Unsupported city: {city}")
+    city_config = CITIES[city_key]
+    resolved_slug = cafe_slug or str(city_config["slug"])
 
     print(f"Connecting to PostgreSQL database {DB_CONFIG['database']} on {DB_CONFIG['host']}...")
     conn = psycopg2.connect(**DB_CONFIG)
@@ -31,40 +42,48 @@ def run_generator(days: int = SYNTHETIC_DAYS, start_date: str = START_DATE, cafe
             ensure_ml_output_tables(cur)
             ensure_daily_weather_table(cur)
 
-            print(f"Deleting old synthetic data for domain={cafe_slug}...")
-            cleanup_existing_synthetic_data(cur, cafe_slug)
+            print(f"Deleting old synthetic data for domain={resolved_slug}...")
+            cleanup_existing_synthetic_data(cur, resolved_slug)
 
             print("Creating synthetic restaurant...")
-            restaurant_id = create_restaurant(cur, cafe_slug)
+            restaurant_id = create_restaurant(cur, resolved_slug, str(city_config["name"]))
 
-            print("Building Bangalore cafe menu, ingredients, and recipes...")
-            menu_items, ingredients, recipes = build_menu_and_ingredients(rng)
+            print(f"Building {city_key.title()} cafe menu, ingredients, and recipes...")
+            menu_items, ingredients, recipes = build_menu_and_ingredients(rng, city_key)
             menu_name_to_id = insert_menu_items(cur, restaurant_id, menu_items)
-            ingredient_name_to_id = insert_ingredients(cur, cafe_slug, ingredients)
+            ingredient_name_to_id = insert_ingredients(cur, resolved_slug, ingredients)
             insert_recipes(cur, menu_name_to_id, ingredient_name_to_id, ingredients, recipes)
 
-            print(f"Simulating {days} days of demand...")
-            orders, order_items, weather_by_day = simulate_demand(parsed_start, days, menu_items, rng)
+            print(f"Simulating {days} days of demand for {city_key.title()}...")
+            orders, order_items, weather_by_day = simulate_demand(parsed_start, days, menu_items, rng, city_key)
             attach_menu_ids_to_order_json(orders, menu_name_to_id)
             order_ref_to_id = insert_orders(cur, restaurant_id, orders)
             insert_order_items(cur, order_items, order_ref_to_id, menu_name_to_id)
-            insert_daily_weather(cur, cafe_slug, weather_by_day)
+            insert_daily_weather(cur, resolved_slug, weather_by_day)
 
             print("Simulating inventory movement and waste...")
             snapshots, waste_logs, daily_consumption = simulate_inventory(parsed_start, days, ingredients, recipes, order_items, rng)
-            insert_inventory_snapshots(cur, cafe_slug, snapshots, ingredient_name_to_id)
-            insert_waste_logs(cur, cafe_slug, waste_logs, ingredient_name_to_id)
+            insert_inventory_snapshots(cur, resolved_slug, snapshots, ingredient_name_to_id)
+            insert_waste_logs(cur, resolved_slug, waste_logs, ingredient_name_to_id)
 
             print("Writing starter ML output examples...")
-            insert_ml_output_examples(cur, cafe_slug, parsed_start, menu_name_to_id, ingredient_name_to_id, menu_items, ingredients, daily_consumption)
+            insert_ml_output_examples(cur, resolved_slug, parsed_start, menu_name_to_id, ingredient_name_to_id, menu_items, ingredients, daily_consumption)
 
         conn.commit()
-        print_summary(cafe_slug, menu_items, ingredients, recipes, orders, order_items, snapshots, waste_logs, weather_by_day)
+        return print_summary(city_key, resolved_slug, menu_items, ingredients, recipes, orders, order_items, snapshots, waste_logs, weather_by_day)
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+
+
+def run_all_cities(days: int = SYNTHETIC_DAYS, start_date: str = START_DATE, seed: int = RANDOM_SEED) -> list[dict[str, Any]]:
+    summaries = []
+    for index, city in enumerate(CITIES):
+        summaries.append(run_generator(days=days, start_date=start_date, seed=seed + index, city=city))
+    print_combined_summary(summaries)
+    return summaries
 
 
 def ensure_inventory_snapshots_table(cur: Any) -> None:
@@ -159,14 +178,14 @@ def cleanup_existing_synthetic_data(cur: Any, cafe_slug: str) -> None:
     cur.execute("DELETE FROM ingredients WHERE cafe_slug = %s", (cafe_slug,))
 
 
-def create_restaurant(cur: Any, cafe_slug: str) -> int:
+def create_restaurant(cur: Any, cafe_slug: str, cafe_name: str = "Synthetic Bangalore Cafe") -> int:
     cur.execute(
         """
         INSERT INTO restaurants (name, domain)
         VALUES (%s, %s)
         RETURNING id
         """,
-        ("Synthetic Bangalore Cafe", cafe_slug),
+        (cafe_name, cafe_slug),
     )
     return int(cur.fetchone()[0])
 
@@ -240,8 +259,12 @@ def insert_recipes(
     ingredient_unit = {ingredient["name"]: ingredient["unit"] for ingredient in ingredients}
     rows = []
     for menu_name, recipe_rows in recipes.items():
+        if menu_name not in menu_name_to_id:
+            continue
         for recipe in recipe_rows:
             ingredient_name = recipe["ingredient_name"]
+            if ingredient_name not in ingredient_name_to_id:
+                continue
             rows.append(
                 (
                     menu_name_to_id[menu_name],
@@ -480,6 +503,7 @@ def insert_ml_output_examples(
 
 
 def print_summary(
+    city: str,
     cafe_slug: str,
     menu_items: list[dict[str, Any]],
     ingredients: list[dict[str, Any]],
@@ -493,9 +517,12 @@ def print_summary(
     revenue = round(sum(order["total"] for order in orders), 2)
     aov = round(revenue / len(orders), 2) if orders else 0
     rain_days = sum(1 for weather in weather_by_day.values() if weather.rain_mm > 0)
+    flood_days = sum(1 for weather in weather_by_day.values() if getattr(weather, "is_flood_shutdown", False))
+    extreme_heat_days = sum(1 for weather in weather_by_day.values() if weather.temperature_c > 40)
     total_waste_cost = round(sum(waste["cost_value"] for waste in waste_logs), 2)
+    unique_customers = len({order["customer_phone"] for order in orders})
 
-    print("\nSynthetic data generation complete")
+    print(f"\n=== {city.title()} Cafe ===")
     print(f"Cafe domain: {cafe_slug}")
     print(f"Menu items: {len(menu_items)}")
     print(f"Ingredients: {len(ingredients)}")
@@ -506,22 +533,53 @@ def print_summary(
     print(f"Waste logs: {len(waste_logs)}")
     print(f"Revenue: INR {revenue}")
     print(f"AOV: INR {aov}")
+    print(f"Unique customers: {unique_customers}")
     print(f"Rain days: {rain_days}")
     print(f"Total waste cost: INR {total_waste_cost}")
+    if flood_days:
+        print(f"Note: July-Aug had {flood_days} flood shutdown days")
+    if extreme_heat_days:
+        print(f"Note: May-Jun had {extreme_heat_days} extreme heat days (>40 C)")
+    return {
+        "city": city,
+        "cafe_slug": cafe_slug,
+        "orders": len(orders),
+        "revenue": revenue,
+        "aov": aov,
+        "unique_customers": unique_customers,
+        "rain_days": rain_days,
+        "waste_cost": total_waste_cost,
+    }
+
+
+def print_combined_summary(summaries: list[dict[str, Any]]) -> None:
+    total_orders = sum(int(summary["orders"]) for summary in summaries)
+    total_revenue = round(sum(float(summary["revenue"]) for summary in summaries), 2)
+    total_customers = sum(int(summary["unique_customers"]) for summary in summaries)
+    print("\n=== Combined ===")
+    print(f"Total orders: {total_orders}")
+    print(f"Total revenue: INR {total_revenue}")
+    print(f"Total unique customers: {total_customers}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate Bangalore-specific synthetic Orlena cafe data.")
+    parser = argparse.ArgumentParser(description="Generate city-specific synthetic Orlena cafe data.")
+    parser.add_argument("--city", choices=[*CITIES.keys(), "all"], default="bangalore")
     parser.add_argument("--days", type=int, default=SYNTHETIC_DAYS)
     parser.add_argument("--start-date", default=START_DATE)
-    parser.add_argument("--cafe-slug", default=SYNTHETIC_CAFE_SLUG)
+    parser.add_argument("--cafe-slug", default=None)
     parser.add_argument("--seed", type=int, default=RANDOM_SEED)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    run_generator(days=args.days, start_date=args.start_date, cafe_slug=args.cafe_slug, seed=args.seed)
+    if args.city == "all":
+        if args.cafe_slug:
+            raise ValueError("--cafe-slug can only be used with a single --city value.")
+        run_all_cities(days=args.days, start_date=args.start_date, seed=args.seed)
+    else:
+        run_generator(days=args.days, start_date=args.start_date, cafe_slug=args.cafe_slug, seed=args.seed, city=args.city)
 
 
 if __name__ == "__main__":

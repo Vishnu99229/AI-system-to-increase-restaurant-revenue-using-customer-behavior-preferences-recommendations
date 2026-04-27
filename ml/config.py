@@ -9,9 +9,33 @@ DB_CONFIG = {
 }
 
 # Synthetic data parameters
-SYNTHETIC_CAFE_SLUG = "synthetic-bangalore-cafe"
-SYNTHETIC_DAYS = 180
-START_DATE = "2025-10-01"
+CITIES = {
+    "bangalore": {
+        "slug": "synthetic-bangalore-cafe",
+        "name": "Brew & Bloom Cafe",
+        "baseline_daily_orders": 100,
+        "price_multiplier": 1.0,
+        "timezone": "Asia/Kolkata",
+    },
+    "mumbai": {
+        "slug": "synthetic-mumbai-cafe",
+        "name": "Salt & Sip Cafe",
+        "baseline_daily_orders": 120,
+        "price_multiplier": 1.15,
+        "timezone": "Asia/Kolkata",
+    },
+    "delhi": {
+        "slug": "synthetic-delhi-cafe",
+        "name": "The Chai Chapter",
+        "baseline_daily_orders": 90,
+        "price_multiplier": 1.05,
+        "timezone": "Asia/Kolkata",
+    },
+}
+
+SYNTHETIC_CAFE_SLUG = CITIES["bangalore"]["slug"]
+SYNTHETIC_DAYS = 365
+START_DATE = "2025-04-01"
 
 DEFAULT_TABLE_COUNT = 15
 RANDOM_SEED = 42

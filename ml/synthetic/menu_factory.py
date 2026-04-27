@@ -151,7 +151,67 @@ MENU_ITEMS: list[MenuItemSpec] = [
 ]
 
 
-def build_menu_and_ingredients(rng: np.random.Generator) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+REQUESTED_BASE_ADDITIONS: list[MenuItemSpec] = [
+    MenuItemSpec("Latte", "Espresso with steamed milk.", 150, "Beverages", "Coffee", ["hot"], 1.02, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Americano", "Black espresso coffee topped with hot water.", 130, "Beverages", "Coffee", ["hot"], 0.92, ["breakfast", "lunch", "snack"], "hot"),
+    MenuItemSpec("Espresso", "Single shot of espresso.", 110, "Beverages", "Coffee", ["hot"], 0.70, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Hot Chocolate", "Creamy cocoa with steamed milk.", 170, "Beverages", "Chocolate", ["hot", "sweet"], 0.72, ["snack", "dinner"], "hot"),
+    MenuItemSpec("Matcha Latte", "Japanese matcha with steamed milk.", 220, "Beverages", "Tea", ["hot", "premium"], 0.46, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Cold Brew", "Slow-steeped cold coffee.", 190, "Beverages", "Coffee", ["cold"], 0.96, ["lunch", "snack"], "cold"),
+    MenuItemSpec("Iced Latte", "Espresso, milk, and ice.", 180, "Beverages", "Coffee", ["cold"], 0.84, ["lunch", "snack"], "cold"),
+    MenuItemSpec("Berry Smoothie", "Mixed berries blended with curd and honey.", 220, "Beverages", "Smoothies", ["cold", "fruit", "healthy"], 0.72, ["breakfast", "snack"], "cold"),
+    MenuItemSpec("Fresh Lime Soda", "Fresh lime, soda, and mint.", 120, "Beverages", "Coolers", ["cold"], 0.86, ["lunch", "snack"], "cold"),
+    MenuItemSpec("Virgin Mojito", "Mint, lime, and soda cooler.", 160, "Beverages", "Mocktails", ["cold"], 0.78, ["snack", "dinner"], "cold"),
+    MenuItemSpec("Eggs Benedict", "Poached eggs with hollandaise on toast.", 320, "Breakfast", "Eggs", ["eggs", "premium"], 0.62, ["breakfast", "lunch"], "neutral"),
+    MenuItemSpec("Pancake Stack", "Fluffy pancakes with butter and syrup.", 260, "Breakfast", "Pancake", ["sweet", "visual"], 0.74, ["breakfast", "snack"], "neutral"),
+    MenuItemSpec("French Toast", "Custard-soaked toast with honey.", 240, "Breakfast", "Toast", ["sweet", "visual"], 0.68, ["breakfast", "snack"], "neutral"),
+    MenuItemSpec("Granola Bowl", "Curd, granola, fruit, and honey.", 260, "Breakfast", "Healthy", ["healthy", "visual"], 0.60, ["breakfast", "lunch"], "cold"),
+    MenuItemSpec("Margherita Pizza", "Classic tomato, basil, and cheese pizza.", 340, "Mains", "Pizza", ["vegetarian", "shareable"], 0.88, ["lunch", "dinner"], "neutral"),
+    MenuItemSpec("Grilled Chicken Sandwich", "Grilled chicken sandwich with lettuce and mayo.", 290, "Sandwiches", "Non Veg", ["chicken"], 0.86, ["lunch", "dinner"], "neutral"),
+    MenuItemSpec("Paneer Tikka Wrap", "Paneer tikka wrapped with mint chutney.", 260, "Mains", "Wrap", ["vegetarian", "spicy"], 0.82, ["lunch", "dinner"], "hot"),
+    MenuItemSpec("Buddha Bowl", "Quinoa, vegetables, greens, and lemon dressing.", 360, "Mains", "Salad Bowl", ["healthy", "vegetarian"], 0.60, ["lunch"], "cold"),
+    MenuItemSpec("Club Sandwich", "Layered chicken, egg, lettuce, and mayo sandwich.", 310, "Sandwiches", "Non Veg", ["chicken"], 0.78, ["lunch", "dinner"], "neutral"),
+    MenuItemSpec("Bruschetta", "Toasted bread with tomato and basil.", 210, "Sides", "Small Plates", ["vegetarian", "visual"], 0.58, ["snack", "dinner"], "neutral"),
+    MenuItemSpec("Nachos", "Corn chips with cheese and salsa.", 240, "Sides", "Small Plates", ["vegetarian", "shareable"], 0.84, ["snack", "dinner"], "neutral"),
+    MenuItemSpec("Soup of the Day", "Seasonal hot soup.", 180, "Sides", "Soup", ["hot", "comfort"], 0.76, ["lunch", "dinner"], "hot"),
+    MenuItemSpec("Cheesecake", "Classic baked cheesecake.", 260, "Desserts", "Cake", ["sweet", "premium"], 0.66, ["snack", "dinner"], "neutral"),
+    MenuItemSpec("Tiramisu", "Coffee-soaked Italian dessert.", 280, "Desserts", "Cake", ["sweet", "premium"], 0.54, ["snack", "dinner"], "neutral"),
+    MenuItemSpec("Ice Cream", "Two scoops of vanilla ice cream.", 160, "Desserts", "Frozen", ["sweet", "cold"], 0.76, ["snack", "dinner"], "cold"),
+    MenuItemSpec("Affogato", "Espresso poured over vanilla ice cream.", 220, "Desserts", "Coffee Dessert", ["sweet", "cold", "premium"], 0.50, ["snack", "dinner"], "cold"),
+]
+
+BANGALORE_ADDITIONS = [
+    MenuItemSpec("Filter Kaapi", "South Indian style strong filter kaapi.", 80, "Beverages", "Coffee", ["hot", "classic"], 1.35, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Bisi Bele Bath Bowl", "Karnataka rice-lentil comfort bowl.", 220, "Mains", "Rice Bowl", ["vegetarian", "comfort"], 0.82, ["lunch"], "hot"),
+    MenuItemSpec("Ragi Mudde Platter", "Ragi mudde with sambar and vegetables.", 250, "Mains", "South Indian", ["healthy", "vegetarian"], 0.56, ["lunch"], "hot"),
+]
+
+MUMBAI_ADDITIONS = [
+    MenuItemSpec("Vada Pav", "Mumbai potato vada in pav.", 60, "Sides", "Street Food", ["vegetarian", "comfort"], 1.25, ["snack", "dinner"], "hot"),
+    MenuItemSpec("Cutting Chai", "Mumbai signature half-cup chai.", 40, "Beverages", "Tea", ["hot", "classic"], 1.45, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Keema Pav", "Irani cafe minced meat with pav.", 220, "Mains", "Irani Cafe", ["comfort"], 0.72, ["breakfast", "lunch", "dinner"], "hot"),
+    MenuItemSpec("Misal Pav", "Spicy Maharashtrian misal with pav.", 180, "Breakfast", "Street Food", ["vegetarian", "spicy", "comfort"], 0.92, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Bun Maska", "Buttered bun served Irani cafe style.", 80, "Bakery", "Irani Cafe", ["vegetarian", "classic"], 1.08, ["breakfast", "snack"], "neutral"),
+]
+
+DELHI_ADDITIONS = [
+    MenuItemSpec("Chole Bhature", "North Indian chole with fried bhature.", 200, "Mains", "North Indian", ["vegetarian", "comfort"], 0.92, ["breakfast", "lunch"], "hot"),
+    MenuItemSpec("Rajma Chawal Bowl", "Delhi-style rajma chawal comfort bowl.", 220, "Mains", "Rice Bowl", ["vegetarian", "comfort"], 0.86, ["lunch", "dinner"], "hot"),
+    MenuItemSpec("Kulhad Chai", "Chai served in a clay kulhad.", 60, "Beverages", "Tea", ["hot", "classic"], 1.28, ["breakfast", "snack"], "hot"),
+    MenuItemSpec("Aloo Parantha Plate", "Stuffed aloo parantha with curd.", 180, "Breakfast", "North Indian", ["vegetarian", "comfort"], 0.88, ["breakfast"], "hot"),
+    MenuItemSpec("Shahi Tukda", "Mughlai bread pudding dessert.", 200, "Desserts", "Mughlai", ["sweet"], 0.58, ["dinner"], "hot"),
+]
+
+CITY_ADDITIONS = {
+    "bangalore": BANGALORE_ADDITIONS,
+    "mumbai": MUMBAI_ADDITIONS,
+    "delhi": DELHI_ADDITIONS,
+}
+
+CITY_PRICE_MULTIPLIERS = {"bangalore": 1.0, "mumbai": 1.15, "delhi": 1.05}
+
+
+def build_menu_and_ingredients(rng: np.random.Generator, city: str = "bangalore") -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     ingredients = [
         {
             "name": item.name,
@@ -170,7 +230,7 @@ def build_menu_and_ingredients(rng: np.random.Generator) -> tuple[list[dict[str,
         {
             "name": item.name,
             "description": item.description,
-            "price": round(float(item.price), 2),
+            "price": round(float(item.price) * CITY_PRICE_MULTIPLIERS.get(city.lower(), 1.0), 2),
             "category": item.category,
             "sub_category": item.sub_category,
             "tags": item.tags,
@@ -178,7 +238,7 @@ def build_menu_and_ingredients(rng: np.random.Generator) -> tuple[list[dict[str,
             "dayparts": item.dayparts,
             "weather_affinity": item.weather_affinity,
         }
-        for item in MENU_ITEMS
+        for item in _menu_specs_for_city(city)
     ]
 
     recipes = _build_recipe_map()
@@ -190,8 +250,19 @@ def _recipe(*pairs: tuple[str, float]) -> list[dict[str, Any]]:
     return [{"ingredient_name": name, "quantity_used": qty} for name, qty in pairs]
 
 
+def _menu_specs_for_city(city: str) -> list[MenuItemSpec]:
+    seen: set[str] = set()
+    specs: list[MenuItemSpec] = []
+    for item in [*MENU_ITEMS, *REQUESTED_BASE_ADDITIONS, *CITY_ADDITIONS.get(city.lower(), [])]:
+        if item.name in seen:
+            continue
+        seen.add(item.name)
+        specs.append(item)
+    return specs
+
+
 def _build_recipe_map() -> dict[str, list[dict[str, Any]]]:
-    return {
+    recipes = {
         "Filter Coffee": _recipe(("Chicory Blend Coffee", 0.018), ("Milk", 0.16), ("Sugar", 0.012), ("Paper Cup", 1)),
         "Cappuccino": _recipe(("Arabica Coffee Beans", 0.018), ("Milk", 0.18), ("Sugar", 0.008), ("Paper Cup", 1)),
         "Iced Americano": _recipe(("Arabica Coffee Beans", 0.020), ("Ice Cubes", 0.12), ("Paper Cup", 1)),
@@ -232,6 +303,52 @@ def _build_recipe_map() -> dict[str, list[dict[str, Any]]]:
         "Ice Cream Brownie": _recipe(("All Purpose Flour", 0.08), ("Cocoa Powder", 0.025), ("Sugar", 0.06), ("Butter", 0.04), ("Eggs", 1), ("Ice Cream", 0.10), ("Chocolate Syrup", 0.020), ("Napkins", 2)),
         "Caramel Banana Pancake": _recipe(("All Purpose Flour", 0.10), ("Milk", 0.10), ("Eggs", 1), ("Banana", 0.12), ("Caramel Syrup", 0.030), ("Butter", 0.015), ("Napkins", 2)),
         "Strawberry Pancake": _recipe(("All Purpose Flour", 0.10), ("Milk", 0.10), ("Eggs", 1), ("Strawberry", 0.12), ("Sugar", 0.020), ("Butter", 0.015), ("Napkins", 2)),
+    }
+    recipes.update(_extra_recipe_map())
+    return recipes
+
+
+def _extra_recipe_map() -> dict[str, list[dict[str, Any]]]:
+    return {
+        "Latte": _recipe(("Arabica Coffee Beans", 0.018), ("Milk", 0.22), ("Sugar", 0.006), ("Paper Cup", 1)),
+        "Americano": _recipe(("Arabica Coffee Beans", 0.020), ("Paper Cup", 1)),
+        "Espresso": _recipe(("Arabica Coffee Beans", 0.018), ("Paper Cup", 1)),
+        "Hot Chocolate": _recipe(("Cocoa Powder", 0.025), ("Milk", 0.22), ("Sugar", 0.018), ("Chocolate Syrup", 0.020), ("Paper Cup", 1)),
+        "Matcha Latte": _recipe(("Tea Leaves", 0.008), ("Milk", 0.20), ("Sugar", 0.010), ("Paper Cup", 1)),
+        "Cold Brew": _recipe(("Arabica Coffee Beans", 0.024), ("Ice Cubes", 0.12), ("Paper Cup", 1)),
+        "Iced Latte": _recipe(("Arabica Coffee Beans", 0.018), ("Milk", 0.18), ("Ice Cubes", 0.12), ("Paper Cup", 1)),
+        "Berry Smoothie": _recipe(("Strawberry", 0.10), ("Blueberry", 0.05), ("Curd", 0.14), ("Honey", 0.018), ("Paper Cup", 1)),
+        "Fresh Lime Soda": _recipe(("Lemon", 0.08), ("Sugar", 0.018), ("Ice Cubes", 0.12), ("Paper Cup", 1)),
+        "Virgin Mojito": _recipe(("Lemon", 0.07), ("Mint", 0.014), ("Sugar", 0.018), ("Ice Cubes", 0.12), ("Paper Cup", 1)),
+        "Eggs Benedict": _recipe(("Eggs", 2), ("Sourdough Bread", 0.22), ("Butter", 0.030), ("Cream", 0.04), ("Napkins", 2)),
+        "Pancake Stack": _recipe(("All Purpose Flour", 0.12), ("Milk", 0.12), ("Eggs", 1), ("Sugar", 0.025), ("Butter", 0.020), ("Napkins", 2)),
+        "French Toast": _recipe(("Milk Bread", 0.28), ("Milk", 0.10), ("Eggs", 1), ("Honey", 0.020), ("Butter", 0.018), ("Napkins", 2)),
+        "Granola Bowl": _recipe(("Rolled Oats", 0.10), ("Curd", 0.16), ("Banana", 0.10), ("Honey", 0.018), ("Takeaway Box", 1)),
+        "Margherita Pizza": _recipe(("All Purpose Flour", 0.14), ("Tomato", 0.10), ("Cheese", 0.09), ("Basil", 0.006), ("Olive Oil", 0.012), ("Takeaway Box", 1)),
+        "Grilled Chicken Sandwich": _recipe(("Milk Bread", 0.25), ("Chicken Breast", 0.14), ("Lettuce", 0.04), ("Mayonnaise", 0.030), ("Takeaway Box", 1)),
+        "Paneer Tikka Wrap": _recipe(("All Purpose Flour", 0.10), ("Paneer", 0.14), ("Curd", 0.04), ("Garam Masala", 0.006), ("Mint", 0.006), ("Takeaway Box", 1)),
+        "Buddha Bowl": _recipe(("Quinoa", 0.11), ("Mixed Greens", 0.08), ("Avocado", 0.10), ("Cucumber", 0.05), ("Carrot", 0.05), ("Lemon", 0.03), ("Takeaway Box", 1)),
+        "Club Sandwich": _recipe(("Milk Bread", 0.30), ("Chicken Breast", 0.12), ("Eggs", 1), ("Lettuce", 0.04), ("Mayonnaise", 0.030), ("Takeaway Box", 1)),
+        "Bruschetta": _recipe(("Sourdough Bread", 0.22), ("Tomato", 0.10), ("Basil", 0.006), ("Olive Oil", 0.012), ("Garlic", 0.004), ("Napkins", 2)),
+        "Nachos": _recipe(("All Purpose Flour", 0.10), ("Cheese", 0.08), ("Tomato", 0.08), ("Onion", 0.03), ("Takeaway Box", 1)),
+        "Soup of the Day": _recipe(("Tomato", 0.16), ("Carrot", 0.08), ("Cream", 0.04), ("Pepper", 0.001), ("Takeaway Box", 1)),
+        "Cheesecake": _recipe(("Cream", 0.08), ("Cheese", 0.06), ("Sugar", 0.04), ("Butter", 0.025), ("Napkins", 2)),
+        "Tiramisu": _recipe(("Arabica Coffee Beans", 0.012), ("Cream", 0.08), ("Sugar", 0.035), ("Cocoa Powder", 0.010), ("Napkins", 2)),
+        "Ice Cream": _recipe(("Ice Cream", 0.16), ("Napkins", 2)),
+        "Affogato": _recipe(("Ice Cream", 0.12), ("Arabica Coffee Beans", 0.018), ("Napkins", 2)),
+        "Filter Kaapi": _recipe(("Chicory Blend Coffee", 0.018), ("Milk", 0.16), ("Sugar", 0.012), ("Paper Cup", 1)),
+        "Bisi Bele Bath Bowl": _recipe(("Basmati Rice", 0.14), ("Rava", 0.04), ("Carrot", 0.06), ("Sambar Powder", 0.010), ("Garam Masala", 0.004), ("Takeaway Box", 1)),
+        "Ragi Mudde Platter": _recipe(("Rice Flour", 0.08), ("Sambar Powder", 0.010), ("Curd", 0.10), ("Carrot", 0.05), ("Takeaway Box", 1)),
+        "Vada Pav": _recipe(("Potato", 0.16), ("Milk Bread", 0.12), ("Green Chilli", 0.004), ("Sunflower Oil", 0.025), ("Takeaway Box", 1)),
+        "Cutting Chai": _recipe(("Tea Leaves", 0.007), ("Masala Chai Mix", 0.004), ("Milk", 0.09), ("Sugar", 0.010), ("Paper Cup", 1)),
+        "Keema Pav": _recipe(("Chicken Breast", 0.14), ("Milk Bread", 0.16), ("Onion", 0.05), ("Tomato", 0.06), ("Garam Masala", 0.006), ("Takeaway Box", 1)),
+        "Misal Pav": _recipe(("Potato", 0.10), ("Onion", 0.05), ("Tomato", 0.06), ("Garam Masala", 0.006), ("Milk Bread", 0.16), ("Takeaway Box", 1)),
+        "Bun Maska": _recipe(("Milk Bread", 0.16), ("Butter", 0.030), ("Napkins", 2)),
+        "Chole Bhature": _recipe(("All Purpose Flour", 0.14), ("Onion", 0.05), ("Tomato", 0.08), ("Garam Masala", 0.008), ("Sunflower Oil", 0.030), ("Takeaway Box", 1)),
+        "Rajma Chawal Bowl": _recipe(("Basmati Rice", 0.16), ("Tomato", 0.08), ("Onion", 0.05), ("Garam Masala", 0.008), ("Takeaway Box", 1)),
+        "Kulhad Chai": _recipe(("Tea Leaves", 0.010), ("Masala Chai Mix", 0.006), ("Milk", 0.15), ("Sugar", 0.014), ("Paper Cup", 1)),
+        "Aloo Parantha Plate": _recipe(("All Purpose Flour", 0.12), ("Potato", 0.16), ("Curd", 0.10), ("Butter", 0.018), ("Takeaway Box", 1)),
+        "Shahi Tukda": _recipe(("Milk Bread", 0.16), ("Milk", 0.12), ("Sugar", 0.04), ("Cardamom", 0.001), ("Butter", 0.020), ("Napkins", 2)),
     }
 
 
