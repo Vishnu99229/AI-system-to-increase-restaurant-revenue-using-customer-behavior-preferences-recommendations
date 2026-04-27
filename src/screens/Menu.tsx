@@ -68,141 +68,34 @@ const DEFAULT_TAB = "Drinks";
 const CHAT_OPENING_TEXT = "Hey! I know this menu well. Ask me anything -- what's good, what's popular, what goes well together.";
 const QUICK_REPLIES: string[] = ["What's popular? 🔥", "Something cold 🧊", "Surprise me ✨"];
 
-type ChatOrderLine = {
-    item: Item;
-    quantity: number;
-    specialInstructions: string;
+type ChatConfirmedOrderItem = {
+    name: string;
+    qty: number;
 };
 
-function detectOrderIntent(message: string): boolean {
-    const lower = message.toLowerCase();
-    const ORDER_SIGNALS = [
-        "place the order",
-        "place order",
-        "order for me",
-        "add to cart",
-        "i want to order",
-        "can you order",
-        "go ahead and order",
-        "yes place",
-        "confirm the order",
-        "order it",
-        "order a",
-        "order an"
-    ];
-    return ORDER_SIGNALS.some(signal => lower.includes(signal));
-}
-
-function parseOrderFromMessage(message: string, menuItems: Item[], context: string = ""): {
-    items: ChatOrderLine[];
+function extractOrderFromReply(reply: string): {
+    cleanReply: string;
+    orderItems: ChatConfirmedOrderItem[] | null;
 } {
-    const lower = message.toLowerCase();
-    const contextLower = context.toLowerCase();
-    const combinedLower = `${contextLower} ${lower}`;
-    const MULTI_ITEM_SIGNALS = [
-        "both",
-        "all",
-        "everything",
-        "all three",
-        "place everything",
-        "order everything",
-        "add both",
-        "order both",
-        "yes to both"
-    ];
-    const wantsMultipleItems = MULTI_ITEM_SIGNALS.some(signal => lower.includes(signal));
+    const tagRegex = /\[ORDER_CONFIRMED\](.*?)\[\/ORDER_CONFIRMED\]/s;
+    const match = reply.match(tagRegex);
 
-    const findMatches = (source: string) => menuItems.filter(item =>
-        source.includes(item.name.toLowerCase())
-    );
-
-    const messageMatches = findMatches(lower);
-    const contextMatches = findMatches(contextLower);
-    const combinedMatches = findMatches(combinedLower);
-
-    let matchedItems: Item[] = [];
-    if (wantsMultipleItems) {
-        matchedItems = combinedMatches;
-    } else if (messageMatches.length > 0) {
-        matchedItems = messageMatches;
-    } else if (contextMatches.length === 1) {
-        matchedItems = contextMatches;
+    if (!match) {
+        return { cleanReply: reply, orderItems: null };
     }
 
-    const quantityMatch = message.match(/\b([1-9])\b/);
-    const quantity = quantityMatch ? parseInt(quantityMatch[1], 10) : 1;
+    const cleanReply = reply.replace(tagRegex, "").trim();
 
-    const instructionMatch = message.match(
-        /(?:no|without|extra|less|add|remove|please)\s+(.+)/i
-    );
-    const specialInstructions = instructionMatch
-        ? instructionMatch[1].trim()
-        : "";
-
-    return {
-        items: matchedItems.map(item => ({
-            item,
-            quantity,
-            specialInstructions
-        }))
-    };
-}
-
-function formatOrderLine(order: ChatOrderLine): string {
-    return `${order.quantity} x ${order.item.name}`;
-}
-
-function formatOrderList(orderItems: ChatOrderLine[]): string {
-    if (orderItems.length === 0) return "";
-    if (orderItems.length === 1) return formatOrderLine(orderItems[0]);
-    if (orderItems.length === 2) {
-        return `${formatOrderLine(orderItems[0])} and ${formatOrderLine(orderItems[1])}`;
+    try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.items && Array.isArray(parsed.items) && parsed.items.length > 0) {
+            return { cleanReply, orderItems: parsed.items };
+        }
+    } catch (e) {
+        console.error("[ChatAgent] Failed to parse ORDER_CONFIRMED tag:", e);
     }
-    const firstItems = orderItems.slice(0, -1).map(formatOrderLine).join(", ");
-    return `${firstItems}, and ${formatOrderLine(orderItems[orderItems.length - 1])}`;
-}
 
-function getOrderTotal(orderItems: ChatOrderLine[]): number {
-    return orderItems.reduce((total, order) => total + getPriceValue(order.item.price) * order.quantity, 0);
-}
-
-function buildConfirmationMessage(orderItems: ChatOrderLine[]): string {
-    const itemDetails = orderItems.map(order => {
-        const itemTotal = getPriceValue(order.item.price) * order.quantity;
-        return `${formatOrderLine(order)} (₹${Math.round(itemTotal)})`;
-    });
-    const itemList = itemDetails.length === 2
-        ? `${itemDetails[0]} and ${itemDetails[1]}`
-        : itemDetails.length > 2
-            ? `${itemDetails.slice(0, -1).join(", ")}, and ${itemDetails[itemDetails.length - 1]}`
-            : itemDetails[0];
-    const note = orderItems.find(order => order.specialInstructions)?.specialInstructions;
-    const total = Math.round(getOrderTotal(orderItems));
-    let message = `Shall I place an order for ${itemList}? Total: ₹${total}`;
-    if (note) {
-        message += ` With the note: "${note}".`;
-    }
-    return message;
-}
-
-function buildAddedToCartMessage(orderItems: ChatOrderLine[]): string {
-    const total = Math.round(getOrderTotal(orderItems));
-    let message = `I have added ${formatOrderList(orderItems)} to your cart. Total: ₹${total}. `;
-    message += "Please tap the cart icon to checkout and verify your phone number ";
-    message += "to confirm the order. After that, I can place future orders directly for you!";
-    return message;
-}
-
-function getVisitTime(lastVisit: string): number {
-    const timestamp = Number(lastVisit);
-    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
-
-    const parsedDate = new Date(lastVisit).getTime();
-    return Number.isNaN(parsedDate) ? 0 : parsedDate;
-}
-
-function getPriceValue(priceStr?: string) {
-    return parseFloat((priceStr || "").replace(/[^0-9.]/g, "")) || 0;
+    return { cleanReply, orderItems: null };
 }
 
 function saveChatMessages(restaurantId: string, messages: MenuChatMessage[]): void {
@@ -354,8 +247,6 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
     const [messages, setMessages] = useState<MenuChatMessage[]>([]);
     const [chatInput, setChatInput] = useState("");
     const [chatLoading, setChatLoading] = useState(false);
-    const [pendingOrder, setPendingOrder] = useState<ChatOrderLine[] | null>(null);
-    const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
     const [activeChip, setActiveChip] = useState<string | null>(null);
     const [keyboardInset, setKeyboardInset] = useState(0);
@@ -688,122 +579,94 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         });
     };
 
-    const handlePlaceOrderFromChat = async (orderItems: ChatOrderLine[]) => {
+    const handleChatOrderPlacement = async (orderItems: ChatConfirmedOrderItem[]) => {
         if (isPlacingOrder) return;
         setIsPlacingOrder(true);
-        setChatLoading(true);
 
         try {
             const visitorNameKey = `${state.restaurantId}_visitor_name`;
-            const lastVisitKey = `${state.restaurantId}_last_visit`;
             const storedName = localStorage.getItem(visitorNameKey);
-            const lastVisit = localStorage.getItem(lastVisitKey);
-            const SIX_HOURS = 6 * 60 * 60 * 1000;
-            const lastVisitTime = lastVisit ? getVisitTime(lastVisit) : 0;
-            const customerName = storedName?.trim() || "";
-            const isReturningCustomer =
-                customerName.length >= 2 &&
-                customerName.length <= 30 &&
-                lastVisitTime > 0 &&
-                Date.now() - lastVisitTime < SIX_HOURS;
-
-            console.log("[ChatAgent] Order attempt:", {
-                isReturningCustomer,
-                customerName,
-                lastVisitTime,
-                timeSinceVisit: Date.now() - lastVisitTime,
-                tableNumber: state.tableNumber,
-                restaurantId: state.restaurantId,
-                itemCount: orderItems.length,
-                items: orderItems.map(order => order.item.name)
-            });
-
-            if (isReturningCustomer) {
-                const orderId = Date.now().toString();
-                const orderTotal = getOrderTotal(orderItems);
-
-                console.log("[ChatAgent] Calling trackOrderComplete:", {
-                    slug: state.restaurantId,
-                    orderId,
-                    orderTotal,
-                    tableNumber: state.tableNumber
-                });
-
-                try {
-                    await trackOrderComplete(
-                        state.restaurantId,
-                        orderId,
-                        orderTotal,
-                        false,
-                        0,
-                        orderItems.map(order => ({
-                            menu_item_id: order.item.id,
-                            name: order.item.name,
-                            quantity: order.quantity,
-                            price: Math.round(getPriceValue(order.item.price)),
-                            specialInstructions: order.specialInstructions || undefined
-                        })),
-                        state.tableNumber || "",
-                        customerName,
-                        state.customerPhone || ""
+            const customerName = storedName?.trim() || state.userName || state.customerName || "Chat Customer";
+            const matchedItems = orderItems
+                .map(orderItem => {
+                    const menuItem = items.find(
+                        item => item.name.toLowerCase().trim() === orderItem.name.toLowerCase().trim()
                     );
-                    console.log("[ChatAgent] trackOrderComplete succeeded");
-                } catch (apiErr: any) {
-                    console.error("[ChatAgent] trackOrderComplete FAILED:", apiErr?.message || apiErr);
-                    addAgentMessage(
-                        "I tried to place the order but something went wrong on my end. " +
-                        "Please use the cart to place your order, or let a staff member know."
-                    );
-                    return;
-                }
 
-                try {
-                    const sessionOrdersKey = `${state.restaurantId}_session_orders`;
-                    const existingRaw = localStorage.getItem(sessionOrdersKey);
-                    const existing = existingRaw ? JSON.parse(existingRaw) : [];
-                    existing.unshift({
-                        id: orderId,
-                        placedAt: new Date().toISOString(),
-                        tableNumber: state.tableNumber || "",
-                        items: orderItems.map(order => ({
-                            name: order.item.name,
-                            price: Math.round(getPriceValue(order.item.price)),
-                            qty: order.quantity
-                        })),
-                        total: Math.round(orderTotal)
-                    });
-                    localStorage.setItem(sessionOrdersKey, JSON.stringify(existing));
-                    setSessionOrders(existing);
-                } catch (err) {
-                    console.warn("[ChatAgent] Failed to save session order:", err);
-                }
-
-                addAgentMessage(
-                    `Done! Your order for ${formatOrderList(orderItems)}` +
-                    ` has been placed${state.tableNumber ? ` for Table ${state.tableNumber}` : ""}. ` +
-                    `Total: ₹${Math.round(orderTotal)}. ` +
-                    `The kitchen has been notified. Anything else?`
-                );
-            } else {
-                console.log("[ChatAgent] Not returning customer, adding to cart instead");
-                orderItems.forEach(order => {
-                    for (let i = 0; i < order.quantity; i++) {
-                        dispatch({ type: "ADD_TO_CART", payload: order.item });
+                    if (!menuItem) {
+                        console.warn(`[ChatAgent] Could not find menu item: ${orderItem.name}`);
+                        return null;
                     }
-                });
 
-                addAgentMessage(buildAddedToCartMessage(orderItems));
+                    return {
+                        id: menuItem.id,
+                        name: menuItem.name,
+                        price: getPriceValue(menuItem.price),
+                        quantity: orderItem.qty || 1,
+                        is_upsell: true
+                    };
+                })
+                .filter((item): item is { id: number; name: string; price: number; quantity: number; is_upsell: boolean } => item !== null);
+
+            if (matchedItems.length === 0) {
+                console.error("[ChatAgent] No items matched from menu");
+                return;
+            }
+
+            const orderId = Date.now().toString();
+            const apiItems = matchedItems.map(item => ({
+                menu_item_id: item.id,
+                name: item.name,
+                price: Math.round(item.price),
+                quantity: item.quantity,
+                is_upsell: item.is_upsell
+            }));
+            const orderTotal = apiItems.reduce((total, item) => total + item.price * item.quantity, 0);
+
+            console.log("[ChatAgent] Placing order with items:", apiItems);
+
+            await trackOrderComplete(
+                state.restaurantId,
+                orderId,
+                orderTotal,
+                false,
+                0,
+                apiItems,
+                state.tableNumber || "",
+                customerName,
+                state.customerPhone || ""
+            );
+
+            console.log("[ChatAgent] Order placed successfully");
+
+            try {
+                const sessionOrdersKey = `${state.restaurantId}_session_orders`;
+                const existingRaw = localStorage.getItem(sessionOrdersKey);
+                const existing = existingRaw ? JSON.parse(existingRaw) : [];
+                existing.unshift({
+                    id: orderId,
+                    placedAt: new Date().toISOString(),
+                    tableNumber: state.tableNumber || "",
+                    items: apiItems.map(item => ({
+                        name: item.name,
+                        price: Math.round(item.price),
+                        qty: item.quantity
+                    })),
+                    total: Math.round(orderTotal)
+                });
+                localStorage.setItem(sessionOrdersKey, JSON.stringify(existing));
+                setSessionOrders(existing);
+            } catch (err) {
+                console.warn("[ChatAgent] Failed to save session order:", err);
             }
         } catch (err: any) {
             console.error("[ChatAgent] Order placement failed:", err?.message || err);
             addAgentMessage(
                 "I had trouble placing that order. " +
-                "Please use the cart to place your order, or let a staff member know."
+                "Please use the cart to place your order, or ask a staff member for help."
             );
         } finally {
-            setChatLoading(false);
             setIsPlacingOrder(false);
-            setPendingOrder(null);
         }
     };
 
@@ -819,61 +682,24 @@ export default function Menu({ onBack, onViewCart }: MenuProps) {
         setChatInput("");
         setShowQuickReplies(false);
 
-        if (awaitingConfirmation && pendingOrder) {
-            const lower = text.toLowerCase().trim();
-            const YES_SIGNALS = ["yes", "yeah", "yep", "go ahead", "confirm", "place it", "do it", "sure", "ok", "okay", "correct"];
-            const NO_SIGNALS = ["no", "nope", "cancel", "don't", "stop", "nevermind", "never mind", "actually no"];
-
-            if (YES_SIGNALS.some(signal => lower.includes(signal))) {
-                setAwaitingConfirmation(false);
-                await handlePlaceOrderFromChat(pendingOrder);
-                return;
-            }
-
-            if (NO_SIGNALS.some(signal => lower.includes(signal))) {
-                setAwaitingConfirmation(false);
-                setPendingOrder(null);
-                addAgentMessage("No problem, I have cancelled that. Is there anything else I can help you with?");
-                return;
-            }
-        }
-
-        if (detectOrderIntent(text)) {
-            const lastUserMessage = baseHistory
-                .slice()
-                .reverse()
-                .find(message => message.role === "user");
-            const recentContext = lastUserMessage ? lastUserMessage.content : "";
-            const { items: parsedOrderItems } = parseOrderFromMessage(
-                text,
-                items,
-                recentContext
-            );
-
-            if (parsedOrderItems.length === 0) {
-                addAgentMessage("I would love to place that order for you. Which item would you like to order?");
-                return;
-            }
-
-            setPendingOrder(parsedOrderItems);
-            setAwaitingConfirmation(true);
-            addAgentMessage(buildConfirmationMessage(parsedOrderItems));
-            return;
-        }
-
         setChatLoading(true);
 
         try {
             const data = await chatWithMenuAssistant(state.restaurantId, text, nextMessages);
+            const { cleanReply, orderItems } = extractOrderFromReply(data.reply);
             const assistantMessage: MenuChatMessage = {
                 role: "assistant",
-                content: data.reply
+                content: cleanReply
             };
             setMessages((prev) => {
                 const updated = [...prev, assistantMessage];
                 saveChatMessages(state.restaurantId, updated);
                 return updated;
             });
+
+            if (orderItems) {
+                await handleChatOrderPlacement(orderItems);
+            }
         } catch (err) {
             console.error("Menu chat failed:", err);
             setMessages((prev) => {

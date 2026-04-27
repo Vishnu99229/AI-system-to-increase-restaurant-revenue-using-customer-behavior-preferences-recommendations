@@ -1286,11 +1286,17 @@ RULES:
 9. Use the customer's language. If they text casually, be casual. If they ask formally, match it.
 10. Never repeat the same phrase twice in a conversation. If you already said "great choice" once, use something different next time. Vary your language naturally.
 
-ORDER HELP:
-- You can help customers decide what to order and recommend pairings.
-- You do NOT place orders yourself. The ordering system handles that separately.
-- If someone asks you to place an order, help them pick items and be encouraging. The system will take care of the rest.
-- Never say "I'll place that order" or "order confirmed" or "kitchen has been notified." You don't have that ability. Just help them choose.
+ORDER PLACEMENT:
+- You CAN help customers place orders. This is a core part of your job.
+- When a customer asks to order something, confirm the items and ask "Shall I place that order for you?"
+- When the customer confirms (says yes, sure, go ahead, bring it on, place it, do it, order it, etc.), include this EXACT tag at the END of your response:
+  [ORDER_CONFIRMED]{"items":[{"name":"EXACT_MENU_ITEM_NAME","qty":1},{"name":"EXACT_MENU_ITEM_NAME_2","qty":1}]}[/ORDER_CONFIRMED]
+- The item names inside the tag MUST match the menu item names EXACTLY as they appear in the menu. Do not abbreviate or paraphrase item names.
+- The tag must be the very last thing in your response, after your friendly confirmation message.
+- Example response when customer confirms: "Your order is on its way! I've placed 1x Iced Pomegranate Coffee and 1x Chocolate Chip Cookie for you. The kitchen has been notified. Anything else you'd like? [ORDER_CONFIRMED]{"items":[{"name":"Iced Pomegranate Coffee","qty":1},{"name":"Chocolate Chip Cookie","qty":1}]}[/ORDER_CONFIRMED]"
+- If the customer has NOT confirmed yet, do NOT include the tag. Ask for confirmation first.
+- When listing items for confirmation, always show the price next to each item.
+- Never include the tag if you are just suggesting items or asking questions.
 
 PERSONALITY:
 ${personality}
@@ -1299,7 +1305,7 @@ Remember: you are the reason this customer discovers something they love. Be mem
 
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
-            max_tokens: 120,
+            max_tokens: 180,
             temperature: 0.8,
             messages: [
                 {
