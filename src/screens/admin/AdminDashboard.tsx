@@ -23,8 +23,8 @@ import {
     fetchWasteLogs,
     createWasteLog,
     fetchWasteSummary,
-    sendAdminAIChat,
-    type AdminAIChatMessage,
+    sendCortexMessage,
+    type CortexMessage,
     type Ingredient
 } from "../../utils/api";
 
@@ -43,7 +43,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) {
-    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes" | "stockTake" | "wasteLog" | "aiAssistant">("analytics");
+    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes" | "stockTake" | "wasteLog" | "cortex">("analytics");
     const [analytics, setAnalytics] = useState<any>(null);
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -101,7 +101,7 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                 <TabButton active={activeTab === "recipes"} onClick={() => setActiveTab("recipes")}>Recipe Mapping</TabButton>
                 <TabButton active={activeTab === "stockTake"} onClick={() => setActiveTab("stockTake")}>Stock Take</TabButton>
                 <TabButton active={activeTab === "wasteLog"} onClick={() => setActiveTab("wasteLog")}>Waste Log</TabButton>
-                <TabButton active={activeTab === "aiAssistant"} onClick={() => setActiveTab("aiAssistant")}>AI Assistant</TabButton>
+                <TabButton active={activeTab === "cortex"} onClick={() => setActiveTab("cortex")}>Cortex</TabButton>
             </nav>
 
             {/* Sound unlock banner */}
@@ -135,7 +135,7 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                         {activeTab === "recipes" && <RecipeMappingView slug={slug} onLogout={onLogout} />}
                         {activeTab === "stockTake" && <StockTakeView slug={slug} onLogout={onLogout} />}
                         {activeTab === "wasteLog" && <WasteLogView slug={slug} onLogout={onLogout} />}
-                        {activeTab === "aiAssistant" && <AIAssistantView slug={slug} />}
+                        {activeTab === "cortex" && <CortexView slug={slug} />}
                     </>
                 )}
             </main>
@@ -156,116 +156,175 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode; a
     );
 }
 
-function AIAssistantView({ slug }: { slug: string }) {
-    const [messages, setMessages] = useState<AdminAIChatMessage[]>([
-        {
-            role: "assistant",
-            content: "- Ask me about demand, prep, ordering, or waste.\n- Example: \"How much should I prep tomorrow?\""
-        }
-    ]);
-    const [query, setQuery] = useState("");
+const CORTEX_WELCOME: CortexMessage = {
+    role: "assistant",
+    content: "Good morning! I'm Orlena Cortex, your cafe's AI brain. Ask me anything about your operations. Here are some things I can help with:"
+};
+
+type CortexCategory = "PURCHASING" | "WASTE" | "FORECAST" | "FOOD_COST" | "SALES" | "INVENTORY" | "VARIANCE" | "GENERAL";
+
+const CORTEX_WELCOME_CHIPS = [
+    "What should I order today?",
+    "Show me this week's waste",
+    "What will sell most tomorrow?",
+    "Which items have the worst food cost?"
+];
+
+const CORTEX_FOLLOW_UPS: Record<CortexCategory, string[]> = {
+    PURCHASING: ["How much will this cost?", "What's expiring soon?", "Show me current stock"],
+    WASTE: ["Which items use these ingredients?", "Compare to last week", "What's expiring soon?"],
+    FORECAST: ["What should I order based on this?", "Show me last week's actuals", "Which items need prep?"],
+    FOOD_COST: ["How can I improve margin?", "Show me top sellers", "Which recipes need review?"],
+    SALES: ["What will sell most tomorrow?", "Which items have the worst food cost?", "What should I order today?"],
+    INVENTORY: ["What's running low?", "What's expiring soon?", "Any overuse this week?"],
+    VARIANCE: ["Which ingredients are leaking?", "How much did this cost?", "Show me current stock"],
+    GENERAL: ["Show me top sellers", "What should I order today?", "Show me this week's waste"]
+};
+
+function CortexView({ slug }: { slug: string }) {
+    const [messages, setMessages] = useState<CortexMessage[]>([CORTEX_WELCOME]);
+    const [input, setInput] = useState("");
     const [isSending, setIsSending] = useState(false);
+    const [errorIndexes, setErrorIndexes] = useState<Set<number>>(new Set());
+    const [lastCategory, setLastCategory] = useState<CortexCategory>("GENERAL");
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isSending]);
 
-    const sendMessage = async (e: React.FormEvent) => {
-        e.preventDefault();
-        const trimmed = query.trim();
+    const submitMessage = async (text: string) => {
+        const trimmed = text.trim();
         if (!trimmed || isSending) return;
 
-        const userMessage: AdminAIChatMessage = { role: "user", content: trimmed };
-        setMessages((prev) => [...prev, userMessage].slice(-10));
-        setQuery("");
+        const category = classifyCortexPrompt(trimmed);
+        const userMessage: CortexMessage = { role: "user", content: trimmed };
+        const history = messages.filter((_, index) => index !== 0).slice(-10);
+        setMessages((prev) => [...prev, userMessage]);
+        setInput("");
         setIsSending(true);
+        setLastCategory(category);
 
         try {
-            const data = await sendAdminAIChat(slug, trimmed);
-            const assistantMessage: AdminAIChatMessage = {
+            const data = await sendCortexMessage(slug, trimmed, history);
+            const assistantMessage: CortexMessage = {
                 role: "assistant",
-                content: data.reply || "- I could not find a useful answer right now.\n- Try asking about demand, prep, or waste."
+                content: data.reply || "I couldn't find a useful answer right now. Try asking about sales, inventory, waste, or food cost."
             };
-            setMessages((prev) => [...prev, assistantMessage].slice(-10));
+            setMessages((prev) => [...prev, assistantMessage]);
         } catch (err) {
-            const fallbackMessage: AdminAIChatMessage = {
+            const message = err instanceof Error ? err.message : "I could not reach Cortex. Try again in a moment.";
+            const assistantMessage: CortexMessage = {
                 role: "assistant",
-                content: "- I could not reach the AI service.\n- Use recent sales as your guide and prep with a 10% buffer."
+                content: message
             };
-            setMessages((prev) => [
-                ...prev,
-                fallbackMessage
-            ].slice(-10));
+            setMessages((prev) => {
+                const next = [...prev, assistantMessage];
+                setErrorIndexes((current) => new Set(current).add(next.length - 1));
+                return next;
+            });
         } finally {
             setIsSending(false);
         }
     };
 
-    const quickPrompts = [
-        "How much should I prep tomorrow?",
-        "What will demand look like this weekend?",
-        "Which items are causing waste?"
-    ];
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        submitMessage(input);
+    };
+
+    const latestMessage = messages[messages.length - 1];
+    const showWelcomeChips = messages.length === 1 && !isSending;
+    const showFollowUps = messages.length > 1 && latestMessage?.role === "assistant" && !isSending && !errorIndexes.has(messages.length - 1);
+    const followUps = CORTEX_FOLLOW_UPS[lastCategory] || CORTEX_FOLLOW_UPS.GENERAL;
 
     return (
         <div className="h-[calc(100vh-220px)] min-h-[520px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100">
-                <h3 className="text-lg font-bold text-gray-800">AI Assistant</h3>
-                <p className="text-xs text-gray-500">Restaurant operations, grounded in recent sales and stock data.</p>
+            <div className="px-4 py-4 border-b border-gray-100 bg-white">
+                <h3 className="text-lg font-bold text-[#1A1A2E]">Orlena Cortex</h3>
+                <p className="text-xs text-gray-500">Your AI Operations Assistant</p>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
-                {messages.map((message, index) => (
-                    <div
-                        key={`${message.role}-${index}`}
-                        className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                        <div
-                            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-line ${
-                                message.role === "user"
-                                    ? "bg-orange-600 text-white rounded-br-md"
-                                    : "bg-white text-gray-800 border border-gray-200 rounded-bl-md"
-                            }`}
-                        >
-                            {message.content}
+                {messages.map((message, index) => {
+                    const isUser = message.role === "user";
+                    const isError = errorIndexes.has(index);
+                    return (
+                        <div key={`${message.role}-${index}`} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                            <div
+                                className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-line ${
+                                    isUser
+                                        ? "bg-[#FF6B35] text-white rounded-br-md"
+                                        : isError
+                                            ? "bg-red-50 text-red-800 border border-red-100 rounded-bl-md"
+                                            : "bg-gray-100 text-[#1A1A2E] border border-gray-200 rounded-bl-md"
+                                }`}
+                            >
+                                {message.content}
+                            </div>
                         </div>
+                    );
+                })}
+
+                {showWelcomeChips && (
+                    <div className="flex flex-wrap gap-2">
+                        {CORTEX_WELCOME_CHIPS.map((chip) => (
+                            <button
+                                key={chip}
+                                type="button"
+                                onClick={() => submitMessage(chip)}
+                                className="text-xs font-bold text-orange-700 bg-white border border-orange-100 rounded-full px-3 py-2 shadow-sm"
+                            >
+                                {chip}
+                            </button>
+                        ))}
                     </div>
-                ))}
+                )}
+
                 {isSending && (
                     <div className="flex justify-start">
-                        <div className="bg-white text-gray-500 border border-gray-200 rounded-2xl rounded-bl-md px-4 py-3 text-sm">
-                            Thinking...
+                        <div className="bg-gray-100 text-gray-500 border border-gray-200 rounded-2xl rounded-bl-md px-4 py-3 text-sm flex items-center gap-1">
+                            <span>Thinking</span>
+                            <span className="inline-flex gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:120ms]" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:240ms]" />
+                            </span>
                         </div>
                     </div>
                 )}
+
+                {showFollowUps && (
+                    <div className="flex flex-wrap gap-2">
+                        {followUps.slice(0, 3).map((chip) => (
+                            <button
+                                key={chip}
+                                type="button"
+                                onClick={() => submitMessage(chip)}
+                                className="text-xs font-bold text-gray-700 bg-white border border-gray-200 rounded-full px-3 py-2 shadow-sm"
+                            >
+                                {chip}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 <div ref={bottomRef} />
             </div>
 
-            <div className="p-3 border-t border-gray-100 bg-white space-y-3">
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                    {quickPrompts.map((prompt) => (
-                        <button
-                            key={prompt}
-                            type="button"
-                            onClick={() => setQuery(prompt)}
-                            className="shrink-0 text-xs font-bold text-orange-700 bg-orange-50 border border-orange-100 rounded-full px-3 py-1.5"
-                        >
-                            {prompt}
-                        </button>
-                    ))}
-                </div>
-                <form onSubmit={sendMessage} className="flex gap-2">
+            <div className="p-3 border-t border-gray-100 bg-white">
+                <form onSubmit={handleSubmit} className="flex gap-2">
                     <input
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Ask about prep, demand, or waste"
-                        className="flex-1 min-w-0 border border-gray-300 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        placeholder={isSending ? "Thinking..." : "Ask about orders, waste, forecasts..."}
+                        disabled={isSending}
+                        className="flex-1 min-w-0 border border-gray-300 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-gray-100"
                     />
                     <button
                         type="submit"
-                        disabled={isSending || !query.trim()}
-                        className="bg-orange-600 text-white font-bold rounded-xl px-4 py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isSending || !input.trim()}
+                        className="bg-[#FF6B35] text-white font-bold rounded-xl px-4 py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Send
                     </button>
@@ -273,6 +332,24 @@ function AIAssistantView({ slug }: { slug: string }) {
             </div>
         </div>
     );
+}
+
+function classifyCortexPrompt(message: string): CortexCategory {
+    const normalized = message.toLowerCase();
+    const checks: Array<[CortexCategory, string[]]> = [
+        ["PURCHASING", ["what should i order", "order", "buy", "purchase"]],
+        ["WASTE", ["waste", "expiring", "throw", "spoil"]],
+        ["FORECAST", ["forecast", "predict", "sell", "tomorrow", "how many"]],
+        ["FOOD_COST", ["food cost", "cost", "margin", "profit"]],
+        ["SALES", ["sales", "revenue", "top", "best selling", "popular"]],
+        ["INVENTORY", ["inventory", "stock", "how much", "left", "remaining"]],
+        ["VARIANCE", ["variance", "gap", "leak", "overuse"]]
+    ];
+
+    for (const [category, keywords] of checks) {
+        if (keywords.some((keyword) => normalized.includes(keyword))) return category;
+    }
+    return "GENERAL";
 }
 
 // -----------------------------------------------------------------

@@ -18,7 +18,6 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret_for_dev";
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:10000";
 
 // --- PostgreSQL Pool ---
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
@@ -488,164 +487,295 @@ app.get("/api/admin/:slug/analytics", authenticateAdmin, async (req, res) => {
     }
 });
 
-app.post("/api/admin/:slug/ai-chat", authenticateAdmin, async (req, res) => {
+const cortexRateLimits = {};
+const CORTEX_CATEGORY_EMPTY_REPLIES = {
+    PURCHASING: "I don't have purchase recommendations yet. Ask the Orlena team to generate today's recommendations for your cafe.",
+    WASTE: "I don't see any waste logged in the last 7 days. Log waste as it happens so I can spot patterns for you.",
+    FORECAST: "I don't have forecast data yet. The prediction engine needs to run first. Ask the Orlena team to generate forecasts for your cafe.",
+    FOOD_COST: "I don't have enough recipe and menu data to calculate food cost yet. Add recipe mappings for your menu items first.",
+    SALES: "I don't see any sales in the last 7 days. Once orders come in, I can show top items and revenue.",
+    INVENTORY: "I don't have recent stock take data yet. Record a stock take so I can answer inventory questions.",
+    VARIANCE: "I don't see any positive inventory variance in the last 7 days. That usually means no overuse is visible from the current stock data."
+};
+
+app.post("/api/admin/:slug/cortex/chat", authenticateAdmin, async (req, res) => {
     const { slug } = req.params;
     if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
 
-    const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
-    if (!query) return res.status(400).json({ error: "Query is required" });
+    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+    const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+    if (!message) return res.status(400).json({ error: "Message is required" });
+
+    if (isCortexRateLimited(slug)) {
+        return res.status(429).json({ reply: "I'm getting too many questions right now. Try again in a minute." });
+    }
 
     try {
-        const context = await buildAdminAIContext(slug, req.admin.restaurant_id);
-        const mlReply = await callMLChat(slug, query, context);
-        if (mlReply) {
-            return res.json({ reply: mlReply, source: "ml-service" });
+        const category = classifyCortexMessage(message);
+        const cafeData = await buildCortexCafeData(category, slug, req.admin.restaurant_id);
+
+        if (!hasCortexData(category, cafeData)) {
+            return res.json({ reply: CORTEX_CATEGORY_EMPTY_REPLIES[category] || "I don't have enough cafe data to answer that yet. Try asking about sales, inventory, waste, or food cost." });
         }
-        return res.json({ reply: buildRuleBasedAIReply(query, context), source: "fallback" });
+
+        const safeHistory = rawHistory
+            .filter((entry) => entry && (entry.role === "user" || entry.role === "assistant") && typeof entry.content === "string")
+            .map((entry) => ({
+                role: entry.role,
+                content: entry.content.trim().slice(0, 800)
+            }))
+            .filter((entry) => entry.content.length > 0)
+            .slice(-10);
+
+        const systemPrompt = `You are Orlena Cortex, the AI operations assistant for a cafe. You help cafe owners understand their business by answering questions about sales, inventory, waste, demand forecasts, and purchasing.
+
+RULES:
+- Answer ONLY using the data provided below. Do not make up numbers.
+- Be specific with quantities, rupee amounts, and dates.
+- Keep answers short and actionable. Max 3-4 sentences unless the owner asks for detail.
+- Use INR symbol for all money amounts.
+- If the data doesn't contain the answer, say so honestly and suggest what the owner can do.
+- Never mention "database", "SQL", "API", "model", "LSTM", "Q-Learning", or any technical terms.
+- Speak like a knowledgeable operations manager, not a robot.
+- Use the owner's language style. If they're casual, be casual. If they're formal, be formal.
+- Round all numbers with Math.round().
+
+CAFE DATA:
+${JSON.stringify(roundCortexNumbers(cafeData), null, 2)}`;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        let completion;
+        try {
+            completion = await openai.chat.completions.create({
+                model: "gpt-4o-mini",
+                max_tokens: 220,
+                temperature: 0.4,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    ...safeHistory,
+                    { role: "user", content: message }
+                ]
+            }, { signal: controller.signal });
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        const reply = completion.choices?.[0]?.message?.content?.trim();
+        if (!reply) throw new Error("Empty Cortex response");
+        return res.json({ reply });
     } catch (err) {
-        console.error("[admin-ai-chat] Fallback used:", err.message);
-        return res.json({
-            reply: buildRuleBasedAIReply(query, { daily_orders: [], top_items: [], inventory: [], waste_summary: [] }),
-            source: "fallback"
-        });
+        console.error("[cortex-chat] Error:", err.message);
+        return res.json({ reply: "I'm having trouble thinking right now. Try again in a moment." });
     }
 });
 
-async function buildAdminAIContext(slug, restaurantId) {
-    const [dailyOrders, topItems, inventory, wasteSummary] = await Promise.all([
-        pool.query(
-            `SELECT DATE(o.created_at) AS sale_date, COUNT(DISTINCT o.id)::int AS orders
-             FROM orders o
-             WHERE o.restaurant_id = $1
-               AND o.created_at >= NOW() - INTERVAL '14 days'
-             GROUP BY DATE(o.created_at)
-             ORDER BY sale_date ASC`,
+function isCortexRateLimited(slug) {
+    const now = Date.now();
+    const windowMs = 60 * 1000;
+    const current = cortexRateLimits[slug];
+    if (!current || current.resetAt <= now) {
+        cortexRateLimits[slug] = { count: 1, resetAt: now + windowMs };
+        return false;
+    }
+    current.count += 1;
+    return current.count > 20;
+}
+
+function classifyCortexMessage(message) {
+    const normalized = String(message || "").toLowerCase();
+    const checks = [
+        ["PURCHASING", ["what should i order", "order", "buy", "purchase"]],
+        ["WASTE", ["waste", "expiring", "throw", "spoil"]],
+        ["FORECAST", ["forecast", "predict", "sell", "tomorrow", "how many"]],
+        ["FOOD_COST", ["food cost", "cost", "margin", "profit"]],
+        ["SALES", ["sales", "revenue", "top", "best selling", "popular"]],
+        ["INVENTORY", ["inventory", "stock", "how much", "left", "remaining"]],
+        ["VARIANCE", ["variance", "gap", "leak", "overuse"]]
+    ];
+
+    for (const [category, keywords] of checks) {
+        if (keywords.some((keyword) => normalized.includes(keyword))) return category;
+    }
+    return "GENERAL";
+}
+
+async function buildCortexCafeData(category, slug, restaurantId) {
+    if (category === "PURCHASING") {
+        const [recommendations, alerts] = await Promise.all([
+            pool.query(
+                `SELECT pr.*, i.name as ingredient_name, i.unit
+                 FROM purchase_recommendations pr
+                 JOIN ingredients i ON i.id = pr.ingredient_id
+                 WHERE pr.cafe_slug = $1
+                 AND pr.recommendation_date = CURRENT_DATE
+                 ORDER BY pr.status, pr.estimated_cost DESC`,
+                [slug]
+            ),
+            pool.query(
+                `SELECT ia.*, i.name as ingredient_name
+                 FROM inventory_alerts ia
+                 JOIN ingredients i ON i.id = ia.ingredient_id
+                 WHERE ia.cafe_slug = $1
+                 AND ia.alert_date = CURRENT_DATE
+                 AND ia.resolved = false`,
+                [slug]
+            )
+        ]);
+        return { category, purchase_recommendations: recommendations.rows, inventory_alerts: alerts.rows };
+    }
+
+    if (category === "WASTE") {
+        const [logs, summary] = await Promise.all([
+            pool.query(
+                `SELECT wl.*, i.name as ingredient_name
+                 FROM waste_log wl
+                 JOIN ingredients i ON i.id = wl.ingredient_id
+                 WHERE wl.cafe_slug = $1
+                 AND wl.logged_at >= NOW() - INTERVAL '7 days'
+                 ORDER BY wl.cost_value DESC
+                 LIMIT 20`,
+                [slug]
+            ),
+            pool.query(
+                `SELECT
+                  SUM(cost_value) as total_waste_cost,
+                  reason,
+                  SUM(cost_value) as reason_cost
+                 FROM waste_log
+                 WHERE cafe_slug = $1 AND logged_at >= NOW() - INTERVAL '7 days'
+                 GROUP BY reason
+                 ORDER BY reason_cost DESC`,
+                [slug]
+            )
+        ]);
+        return { category, recent_waste: logs.rows, waste_summary: summary.rows };
+    }
+
+    if (category === "FORECAST") {
+        const result = await pool.query(
+            `SELECT df.*, m.name as item_name
+             FROM demand_forecasts df
+             JOIN menus m ON m.id = df.menu_item_id
+             WHERE df.cafe_slug = $1
+             AND df.forecast_date >= CURRENT_DATE
+             AND df.forecast_date <= CURRENT_DATE + INTERVAL '7 days'
+             ORDER BY df.forecast_date, df.predicted_quantity DESC`,
+            [slug]
+        );
+        return { category, demand_forecasts: result.rows };
+    }
+
+    if (category === "FOOD_COST") {
+        const result = await pool.query(
+            `SELECT
+              m.name,
+              m.price as selling_price,
+              COALESCE(SUM(ri.quantity_used * i.cost_per_unit), 0) as food_cost
+             FROM menus m
+             LEFT JOIN recipe_ingredients ri ON ri.menu_item_id = m.id
+             LEFT JOIN ingredients i ON i.id = ri.ingredient_id
+             WHERE m.restaurant_id = $1
+             GROUP BY m.id, m.name, m.price
+             ORDER BY (COALESCE(SUM(ri.quantity_used * i.cost_per_unit), 0) / NULLIF(m.price, 0)) DESC`,
             [restaurantId]
-        ),
-        pool.query(
-            `SELECT oi.item_name, SUM(oi.quantity)::float AS units_sold
+        );
+        return { category, food_costs: result.rows };
+    }
+
+    if (category === "SALES") {
+        const result = await pool.query(
+            `SELECT
+              oi.item_name,
+              COUNT(*) as times_ordered,
+              SUM(oi.quantity) as total_quantity,
+              SUM(oi.unit_price * oi.quantity) as total_revenue
              FROM order_items oi
              JOIN orders o ON o.id = oi.order_id
              WHERE o.restaurant_id = $1
-               AND o.created_at >= NOW() - INTERVAL '14 days'
+             AND o.created_at >= NOW() - INTERVAL '7 days'
              GROUP BY oi.item_name
-             ORDER BY units_sold DESC
-             LIMIT 5`,
+             ORDER BY total_quantity DESC
+             LIMIT 15`,
+            [restaurantId]
+        );
+        return { category, sales: result.rows };
+    }
+
+    if (category === "INVENTORY") {
+        const result = await pool.query(
+            `SELECT i.name, i.unit, i.shelf_life_hours, i.cost_per_unit,
+              inv.quantity_on_hand, inv.recorded_at
+             FROM ingredients i
+             JOIN LATERAL (
+              SELECT quantity_on_hand, recorded_at
+              FROM inventory_snapshots
+              WHERE ingredient_id = i.id AND cafe_slug = $1
+              ORDER BY recorded_at DESC LIMIT 1
+             ) inv ON true
+             WHERE i.cafe_slug = $1 AND i.is_active = true
+             ORDER BY i.name`,
+            [slug]
+        );
+        return { category, inventory: result.rows };
+    }
+
+    if (category === "VARIANCE") {
+        const variance = await buildInventoryVariance(restaurantId, slug, 7);
+        return { category, ...variance };
+    }
+
+    const [ordersToday, pendingPurchases, activeAlerts] = await Promise.all([
+        pool.query(
+            `SELECT COUNT(*)::int as total_orders, COALESCE(SUM(total), 0) as total_revenue
+             FROM orders
+             WHERE restaurant_id = $1 AND created_at >= CURRENT_DATE`,
             [restaurantId]
         ),
         pool.query(
-            `SELECT DISTINCT ON (i.id)
-                i.name AS ingredient_name,
-                i.unit,
-                s.quantity_on_hand,
-                s.recorded_at
-             FROM ingredients i
-             LEFT JOIN inventory_snapshots s
-               ON s.ingredient_id = i.id AND s.cafe_slug = $1
-             WHERE i.cafe_slug = $1 AND i.is_active = true
-             ORDER BY i.id, s.recorded_at DESC NULLS LAST
-             LIMIT 30`,
+            `SELECT COUNT(*)::int as pending_purchase_recommendations
+             FROM purchase_recommendations
+             WHERE cafe_slug = $1 AND recommendation_date = CURRENT_DATE AND status = 'pending'`,
             [slug]
         ),
         pool.query(
-            `SELECT i.name AS ingredient_name, COALESCE(SUM(w.cost_value), 0)::float AS total_cost
-             FROM waste_log w
-             JOIN ingredients i ON i.id = w.ingredient_id
-             WHERE w.cafe_slug = $1
-               AND w.logged_at >= NOW() - INTERVAL '14 days'
-             GROUP BY i.name
-             ORDER BY total_cost DESC
-             LIMIT 5`,
+            `SELECT COUNT(*)::int as active_waste_alerts
+             FROM inventory_alerts
+             WHERE cafe_slug = $1 AND alert_date = CURRENT_DATE AND resolved = false`,
             [slug]
         )
     ]);
 
     return {
-        daily_orders: dailyOrders.rows,
-        top_items: topItems.rows,
-        inventory: inventory.rows,
-        waste_summary: wasteSummary.rows
+        category,
+        today: ordersToday.rows[0],
+        pending_purchase_recommendations: pendingPurchases.rows[0]?.pending_purchase_recommendations || 0,
+        active_waste_alerts: activeAlerts.rows[0]?.active_waste_alerts || 0
     };
 }
 
-async function callMLChat(slug, query, context) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
-    try {
-        const response = await fetch(`${ML_SERVICE_URL.replace(/\/$/, "")}/chat`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cafe_slug: slug, query, context }),
-            signal: controller.signal
-        });
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.response || data.reply || null;
-    } catch (err) {
-        console.error("[admin-ai-chat] ML service unavailable:", err.message);
-        return null;
-    } finally {
-        clearTimeout(timeout);
-    }
+function hasCortexData(category, data) {
+    if (category === "GENERAL") return true;
+    if (category === "PURCHASING") return data.purchase_recommendations.length > 0 || data.inventory_alerts.length > 0;
+    if (category === "WASTE") return data.recent_waste.length > 0 || data.waste_summary.length > 0;
+    if (category === "FORECAST") return data.demand_forecasts.length > 0;
+    if (category === "FOOD_COST") return data.food_costs.length > 0;
+    if (category === "SALES") return data.sales.length > 0;
+    if (category === "INVENTORY") return data.inventory.length > 0;
+    if (category === "VARIANCE") return data.items.length > 0;
+    return true;
 }
 
-function buildRuleBasedAIReply(query, context) {
-    const normalized = String(query || "").toLowerCase();
-    const dailyOrders = Array.isArray(context.daily_orders) ? context.daily_orders : [];
-    const topItems = Array.isArray(context.top_items) ? context.top_items : [];
-    const wasteSummary = Array.isArray(context.waste_summary) ? context.waste_summary : [];
-    const avgOrders = averageOrders(dailyOrders);
-    const prepUnits = Math.max(1, Math.round(avgOrders * 1.1));
-    const topItem = topItems[0]?.item_name || "your top-selling items";
-
-    if (normalized.includes("waste")) {
-        const waste = wasteSummary[0];
-        if (!waste) {
-            return [
-                "- No major waste driver is visible in the last 14 days.",
-                "- Check overprepped and expired ingredients after each rush.",
-                "- Keep tomorrow's prep close to the recent 7-day sales average."
-            ].join("\n");
-        }
-        return [
-            `- Biggest waste driver: ${waste.ingredient_name} (~INR ${Math.round(Number(waste.total_cost) || 0)}).`,
-            "- Reduce prep for this ingredient by 10-15% tomorrow.",
-            "- Review menu items using it before placing the next order."
-        ].join("\n");
+function roundCortexNumbers(value) {
+    if (Array.isArray(value)) return value.map(roundCortexNumbers);
+    if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, roundCortexNumbers(entry)]));
     }
-
-    if (normalized.includes("prep") || normalized.includes("order")) {
-        return [
-            `- Expected demand: about ${avgOrders} orders based on recent sales.`,
-            `- Recommended prep: ${prepUnits} units with a 10% buffer.`,
-            `- Prioritize ${topItem} first.`,
-            "- Recheck low-stock ingredients before peak hours."
-        ].join("\n");
+    if (typeof value === "number") return Math.round(value);
+    if (typeof value === "string" && value.trim() !== "" && /^-?\d+(\.\d+)?$/.test(value.trim())) {
+        return Math.round(Number(value));
     }
-
-    if (normalized.includes("demand") || normalized.includes("weekend")) {
-        return [
-            `- Expected demand: about ${avgOrders} orders.`,
-            `- Planning range: ${Math.max(0, avgOrders - 4)}-${avgOrders + 4} orders.`,
-            `- ${topItem} is a key item to watch.`,
-            "- Keep extra buffer for beverages and quick snacks."
-        ].join("\n");
-    }
-
-    return [
-        "- I can help with demand, prep, ordering, and waste.",
-        "- Ask: \"How much should I prep tomorrow?\"",
-        "- Or: \"Which items are causing waste?\""
-    ].join("\n");
-}
-
-function averageOrders(dailyOrders) {
-    const values = dailyOrders
-        .map((row) => Number(row.orders))
-        .filter((value) => Number.isFinite(value) && value > 0);
-    if (values.length === 0) return 42;
-    const lastSeven = values.slice(-7);
-    return Math.max(1, Math.round(lastSeven.reduce((sum, value) => sum + value, 0) / lastSeven.length));
+    return value;
 }
 
 // --- Admin Orders ---
@@ -1205,6 +1335,80 @@ app.get("/api/admin/:slug/waste/summary", authenticateAdmin, async (req, res) =>
     }
 });
 
+async function buildInventoryVariance(restaurantId, slug, days) {
+    const inventoryTableCheck = await pool.query(`SELECT to_regclass('public.inventory_snapshots') AS table_name`);
+    if (!inventoryTableCheck.rows[0]?.table_name) {
+        return { days, total_variance_cost: 0, items: [] };
+    }
+
+    const varianceResult = await pool.query(
+        `WITH theoretical_usage AS (
+            SELECT
+                ri.ingredient_id,
+                COALESCE(SUM(ri.quantity_used * oi.quantity), 0) AS theoretical_usage
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN recipe_ingredients ri ON ri.menu_item_id = oi.menu_item_id
+            WHERE o.restaurant_id = $1
+              AND o.created_at >= NOW() - (($2::text || ' days')::interval)
+            GROUP BY ri.ingredient_id
+        ),
+        snapshots_in_window AS (
+            SELECT
+                s.ingredient_id,
+                s.quantity_on_hand,
+                s.recorded_at,
+                ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at ASC) AS first_rank,
+                ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at DESC) AS last_rank
+            FROM inventory_snapshots s
+            WHERE s.cafe_slug = $3
+              AND s.recorded_at >= NOW() - (($2::text || ' days')::interval)
+        ),
+        snapshot_delta AS (
+            SELECT
+                f.ingredient_id,
+                (f.quantity_on_hand - l.quantity_on_hand) AS actual_usage
+            FROM snapshots_in_window f
+            JOIN snapshots_in_window l
+              ON l.ingredient_id = f.ingredient_id
+            WHERE f.first_rank = 1 AND l.last_rank = 1
+        )
+        SELECT
+            i.id AS ingredient_id,
+            i.name AS ingredient_name,
+            COALESCE(t.theoretical_usage, 0) AS theoretical_usage,
+            COALESCE(s.actual_usage, 0) AS actual_usage,
+            (COALESCE(s.actual_usage, 0) - COALESCE(t.theoretical_usage, 0)) AS variance,
+            i.cost_per_unit
+        FROM ingredients i
+        LEFT JOIN theoretical_usage t ON t.ingredient_id = i.id
+        LEFT JOIN snapshot_delta s ON s.ingredient_id = i.id
+        WHERE i.cafe_slug = $3
+          AND i.is_active = true`,
+        [restaurantId, days, slug]
+    );
+
+    const items = varianceResult.rows
+        .map((row) => {
+            const theoreticalUsage = Number(row.theoretical_usage) || 0;
+            const actualUsage = Number(row.actual_usage) || 0;
+            const variance = actualUsage - theoreticalUsage;
+            const varianceCost = Math.round(variance * (Number(row.cost_per_unit) || 0));
+            return {
+                ingredient_id: row.ingredient_id,
+                ingredient_name: row.ingredient_name,
+                theoretical_usage: Math.round(theoreticalUsage),
+                actual_usage: Math.round(actualUsage),
+                variance: Math.round(variance),
+                variance_cost: varianceCost
+            };
+        })
+        .filter((row) => row.variance > 0);
+
+    const totalVarianceCost = Math.round(items.reduce((sum, row) => sum + row.variance_cost, 0));
+    return { days, total_variance_cost: totalVarianceCost, items };
+}
+
 app.get("/api/admin/:slug/inventory/variance", authenticateAdmin, async (req, res) => {
     const { slug } = req.params;
     if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
@@ -1212,77 +1416,8 @@ app.get("/api/admin/:slug/inventory/variance", authenticateAdmin, async (req, re
     const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.round(daysRaw) : 7;
 
     try {
-        const inventoryTableCheck = await pool.query(`SELECT to_regclass('public.inventory_snapshots') AS table_name`);
-        if (!inventoryTableCheck.rows[0]?.table_name) {
-            return res.json({ days, total_variance_cost: 0, items: [] });
-        }
-
-        const varianceResult = await pool.query(
-            `WITH theoretical_usage AS (
-                SELECT
-                    ri.ingredient_id,
-                    COALESCE(SUM(ri.quantity_used * oi.quantity), 0) AS theoretical_usage
-                FROM order_items oi
-                JOIN orders o ON o.id = oi.order_id
-                JOIN recipe_ingredients ri ON ri.menu_item_id = oi.menu_item_id
-                WHERE o.restaurant_id = $1
-                  AND o.created_at >= NOW() - (($2::text || ' days')::interval)
-                GROUP BY ri.ingredient_id
-            ),
-            snapshots_in_window AS (
-                SELECT
-                    s.ingredient_id,
-                    s.quantity_on_hand,
-                    s.recorded_at,
-                    ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at ASC) AS first_rank,
-                    ROW_NUMBER() OVER (PARTITION BY s.ingredient_id ORDER BY s.recorded_at DESC) AS last_rank
-                FROM inventory_snapshots s
-                WHERE s.cafe_slug = $3
-                  AND s.recorded_at >= NOW() - (($2::text || ' days')::interval)
-            ),
-            snapshot_delta AS (
-                SELECT
-                    f.ingredient_id,
-                    (f.quantity_on_hand - l.quantity_on_hand) AS actual_usage
-                FROM snapshots_in_window f
-                JOIN snapshots_in_window l
-                  ON l.ingredient_id = f.ingredient_id
-                WHERE f.first_rank = 1 AND l.last_rank = 1
-            )
-            SELECT
-                i.id AS ingredient_id,
-                i.name AS ingredient_name,
-                COALESCE(t.theoretical_usage, 0) AS theoretical_usage,
-                COALESCE(s.actual_usage, 0) AS actual_usage,
-                (COALESCE(s.actual_usage, 0) - COALESCE(t.theoretical_usage, 0)) AS variance,
-                i.cost_per_unit
-            FROM ingredients i
-            LEFT JOIN theoretical_usage t ON t.ingredient_id = i.id
-            LEFT JOIN snapshot_delta s ON s.ingredient_id = i.id
-            WHERE i.cafe_slug = $3
-              AND i.is_active = true`,
-            [req.admin.restaurant_id, days, slug]
-        );
-
-        const items = varianceResult.rows
-            .map((row) => {
-                const theoreticalUsage = Number(row.theoretical_usage) || 0;
-                const actualUsage = Number(row.actual_usage) || 0;
-                const variance = actualUsage - theoreticalUsage;
-                const varianceCost = Math.round(variance * (Number(row.cost_per_unit) || 0));
-                return {
-                    ingredient_id: row.ingredient_id,
-                    ingredient_name: row.ingredient_name,
-                    theoretical_usage: Math.round(theoreticalUsage),
-                    actual_usage: Math.round(actualUsage),
-                    variance: Math.round(variance),
-                    variance_cost: varianceCost
-                };
-            })
-            .filter((row) => row.variance > 0);
-
-        const totalVarianceCost = Math.round(items.reduce((sum, row) => sum + row.variance_cost, 0));
-        res.json({ days, total_variance_cost: totalVarianceCost, items });
+        const variance = await buildInventoryVariance(req.admin.restaurant_id, slug, days);
+        res.json(variance);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch inventory variance" });
     }

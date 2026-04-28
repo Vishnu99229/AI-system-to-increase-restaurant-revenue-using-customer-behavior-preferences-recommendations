@@ -396,21 +396,32 @@ export async function fetchWasteSummary(slug: string, days: number): Promise<Was
     return res.json();
 }
 
-export type AdminAIChatMessage = {
+export interface CortexMessage {
     role: "user" | "assistant";
     content: string;
-};
+}
 
-export async function sendAdminAIChat(slug: string, query: string): Promise<{ reply: string; source?: string }> {
-    const res = await fetch(`${API_BASE}/api/admin/${slug}/ai-chat`, {
+export interface CortexResponse {
+    reply: string;
+}
+
+export async function sendCortexMessage(
+    slug: string,
+    message: string,
+    history: CortexMessage[]
+): Promise<CortexResponse> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/cortex/chat`, {
         method: "POST",
         headers: {
             ...getAuthHeader(),
             "Content-Type": "application/json"
         },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ message, history })
     });
-    if (!res.ok) throw new Error("AI chat request failed");
+    if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.reply || data?.error || "Cortex chat request failed");
+    }
     return res.json();
 }
 
