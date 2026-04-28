@@ -396,6 +396,24 @@ export async function fetchWasteSummary(slug: string, days: number): Promise<Was
     return res.json();
 }
 
+export type AdminAIChatMessage = {
+    role: "user" | "assistant";
+    content: string;
+};
+
+export async function sendAdminAIChat(slug: string, query: string): Promise<{ reply: string; source?: string }> {
+    const res = await fetch(`${API_BASE}/api/admin/${slug}/ai-chat`, {
+        method: "POST",
+        headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ query })
+    });
+    if (!res.ok) throw new Error("AI chat request failed");
+    return res.json();
+}
+
 export type MenuChatMessage = {
     role: "user" | "assistant";
     content: string;

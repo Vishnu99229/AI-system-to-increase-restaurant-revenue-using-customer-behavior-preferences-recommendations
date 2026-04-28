@@ -18,6 +18,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret_for_dev";
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:10000";
 
 // --- PostgreSQL Pool ---
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
@@ -486,6 +487,166 @@ app.get("/api/admin/:slug/analytics", authenticateAdmin, async (req, res) => {
         res.status(500).json({ error: "Failed to fetch analytics" });
     }
 });
+
+app.post("/api/admin/:slug/ai-chat", authenticateAdmin, async (req, res) => {
+    const { slug } = req.params;
+    if (req.admin.slug !== slug) return res.status(403).json({ error: "Forbidden" });
+
+    const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
+    if (!query) return res.status(400).json({ error: "Query is required" });
+
+    try {
+        const context = await buildAdminAIContext(slug, req.admin.restaurant_id);
+        const mlReply = await callMLChat(slug, query, context);
+        if (mlReply) {
+            return res.json({ reply: mlReply, source: "ml-service" });
+        }
+        return res.json({ reply: buildRuleBasedAIReply(query, context), source: "fallback" });
+    } catch (err) {
+        console.error("[admin-ai-chat] Fallback used:", err.message);
+        return res.json({
+            reply: buildRuleBasedAIReply(query, { daily_orders: [], top_items: [], inventory: [], waste_summary: [] }),
+            source: "fallback"
+        });
+    }
+});
+
+async function buildAdminAIContext(slug, restaurantId) {
+    const [dailyOrders, topItems, inventory, wasteSummary] = await Promise.all([
+        pool.query(
+            `SELECT DATE(o.created_at) AS sale_date, COUNT(DISTINCT o.id)::int AS orders
+             FROM orders o
+             WHERE o.restaurant_id = $1
+               AND o.created_at >= NOW() - INTERVAL '14 days'
+             GROUP BY DATE(o.created_at)
+             ORDER BY sale_date ASC`,
+            [restaurantId]
+        ),
+        pool.query(
+            `SELECT oi.item_name, SUM(oi.quantity)::float AS units_sold
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             WHERE o.restaurant_id = $1
+               AND o.created_at >= NOW() - INTERVAL '14 days'
+             GROUP BY oi.item_name
+             ORDER BY units_sold DESC
+             LIMIT 5`,
+            [restaurantId]
+        ),
+        pool.query(
+            `SELECT DISTINCT ON (i.id)
+                i.name AS ingredient_name,
+                i.unit,
+                s.quantity_on_hand,
+                s.recorded_at
+             FROM ingredients i
+             LEFT JOIN inventory_snapshots s
+               ON s.ingredient_id = i.id AND s.cafe_slug = $1
+             WHERE i.cafe_slug = $1 AND i.is_active = true
+             ORDER BY i.id, s.recorded_at DESC NULLS LAST
+             LIMIT 30`,
+            [slug]
+        ),
+        pool.query(
+            `SELECT i.name AS ingredient_name, COALESCE(SUM(w.cost_value), 0)::float AS total_cost
+             FROM waste_log w
+             JOIN ingredients i ON i.id = w.ingredient_id
+             WHERE w.cafe_slug = $1
+               AND w.logged_at >= NOW() - INTERVAL '14 days'
+             GROUP BY i.name
+             ORDER BY total_cost DESC
+             LIMIT 5`,
+            [slug]
+        )
+    ]);
+
+    return {
+        daily_orders: dailyOrders.rows,
+        top_items: topItems.rows,
+        inventory: inventory.rows,
+        waste_summary: wasteSummary.rows
+    };
+}
+
+async function callMLChat(slug, query, context) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    try {
+        const response = await fetch(`${ML_SERVICE_URL.replace(/\/$/, "")}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cafe_slug: slug, query, context }),
+            signal: controller.signal
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data.response || data.reply || null;
+    } catch (err) {
+        console.error("[admin-ai-chat] ML service unavailable:", err.message);
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function buildRuleBasedAIReply(query, context) {
+    const normalized = String(query || "").toLowerCase();
+    const dailyOrders = Array.isArray(context.daily_orders) ? context.daily_orders : [];
+    const topItems = Array.isArray(context.top_items) ? context.top_items : [];
+    const wasteSummary = Array.isArray(context.waste_summary) ? context.waste_summary : [];
+    const avgOrders = averageOrders(dailyOrders);
+    const prepUnits = Math.max(1, Math.round(avgOrders * 1.1));
+    const topItem = topItems[0]?.item_name || "your top-selling items";
+
+    if (normalized.includes("waste")) {
+        const waste = wasteSummary[0];
+        if (!waste) {
+            return [
+                "- No major waste driver is visible in the last 14 days.",
+                "- Check overprepped and expired ingredients after each rush.",
+                "- Keep tomorrow's prep close to the recent 7-day sales average."
+            ].join("\n");
+        }
+        return [
+            `- Biggest waste driver: ${waste.ingredient_name} (~INR ${Math.round(Number(waste.total_cost) || 0)}).`,
+            "- Reduce prep for this ingredient by 10-15% tomorrow.",
+            "- Review menu items using it before placing the next order."
+        ].join("\n");
+    }
+
+    if (normalized.includes("prep") || normalized.includes("order")) {
+        return [
+            `- Expected demand: about ${avgOrders} orders based on recent sales.`,
+            `- Recommended prep: ${prepUnits} units with a 10% buffer.`,
+            `- Prioritize ${topItem} first.`,
+            "- Recheck low-stock ingredients before peak hours."
+        ].join("\n");
+    }
+
+    if (normalized.includes("demand") || normalized.includes("weekend")) {
+        return [
+            `- Expected demand: about ${avgOrders} orders.`,
+            `- Planning range: ${Math.max(0, avgOrders - 4)}-${avgOrders + 4} orders.`,
+            `- ${topItem} is a key item to watch.`,
+            "- Keep extra buffer for beverages and quick snacks."
+        ].join("\n");
+    }
+
+    return [
+        "- I can help with demand, prep, ordering, and waste.",
+        "- Ask: \"How much should I prep tomorrow?\"",
+        "- Or: \"Which items are causing waste?\""
+    ].join("\n");
+}
+
+function averageOrders(dailyOrders) {
+    const values = dailyOrders
+        .map((row) => Number(row.orders))
+        .filter((value) => Number.isFinite(value) && value > 0);
+    if (values.length === 0) return 42;
+    const lastSeven = values.slice(-7);
+    return Math.max(1, Math.round(lastSeven.reduce((sum, value) => sum + value, 0) / lastSeven.length));
+}
 
 // --- Admin Orders ---
 app.get("/api/admin/:slug/orders", authenticateAdmin, async (req, res) => {

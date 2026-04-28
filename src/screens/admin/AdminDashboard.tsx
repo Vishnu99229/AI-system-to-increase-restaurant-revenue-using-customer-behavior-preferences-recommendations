@@ -23,6 +23,8 @@ import {
     fetchWasteLogs,
     createWasteLog,
     fetchWasteSummary,
+    sendAdminAIChat,
+    type AdminAIChatMessage,
     type Ingredient
 } from "../../utils/api";
 
@@ -41,7 +43,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) {
-    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes" | "stockTake" | "wasteLog">("analytics");
+    const [activeTab, setActiveTab] = useState<"analytics" | "menu" | "ingredients" | "recipes" | "stockTake" | "wasteLog" | "aiAssistant">("analytics");
     const [analytics, setAnalytics] = useState<any>(null);
     const [menuItems, setMenuItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -92,13 +94,14 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
             </header>
 
             {/* Navigation Tabs */}
-            <nav className="bg-white border-b border-gray-200 px-6 flex gap-8">
+            <nav className="bg-white border-b border-gray-200 px-6 flex gap-8 overflow-x-auto">
                 <TabButton active={activeTab === "analytics"} onClick={() => setActiveTab("analytics")}>Analytics</TabButton>
                 <TabButton active={activeTab === "menu"} onClick={() => setActiveTab("menu")}>Menu Manager</TabButton>
                 <TabButton active={activeTab === "ingredients"} onClick={() => setActiveTab("ingredients")}>Ingredients</TabButton>
                 <TabButton active={activeTab === "recipes"} onClick={() => setActiveTab("recipes")}>Recipe Mapping</TabButton>
                 <TabButton active={activeTab === "stockTake"} onClick={() => setActiveTab("stockTake")}>Stock Take</TabButton>
                 <TabButton active={activeTab === "wasteLog"} onClick={() => setActiveTab("wasteLog")}>Waste Log</TabButton>
+                <TabButton active={activeTab === "aiAssistant"} onClick={() => setActiveTab("aiAssistant")}>AI Assistant</TabButton>
             </nav>
 
             {/* Sound unlock banner */}
@@ -132,6 +135,7 @@ export default function AdminDashboard({ slug, onLogout }: AdminDashboardProps) 
                         {activeTab === "recipes" && <RecipeMappingView slug={slug} onLogout={onLogout} />}
                         {activeTab === "stockTake" && <StockTakeView slug={slug} onLogout={onLogout} />}
                         {activeTab === "wasteLog" && <WasteLogView slug={slug} onLogout={onLogout} />}
+                        {activeTab === "aiAssistant" && <AIAssistantView slug={slug} />}
                     </>
                 )}
             </main>
@@ -143,12 +147,131 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode; a
     return (
         <button
             onClick={onClick}
-            className={`py-4 text-sm font-bold border-b-2 transition-all ${
+            className={`py-4 text-sm font-bold border-b-2 transition-all whitespace-nowrap ${
                 active ? "border-orange-600 text-orange-600" : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
         >
             {children}
         </button>
+    );
+}
+
+function AIAssistantView({ slug }: { slug: string }) {
+    const [messages, setMessages] = useState<AdminAIChatMessage[]>([
+        {
+            role: "assistant",
+            content: "- Ask me about demand, prep, ordering, or waste.\n- Example: \"How much should I prep tomorrow?\""
+        }
+    ]);
+    const [query, setQuery] = useState("");
+    const [isSending, setIsSending] = useState(false);
+    const bottomRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages, isSending]);
+
+    const sendMessage = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const trimmed = query.trim();
+        if (!trimmed || isSending) return;
+
+        const userMessage: AdminAIChatMessage = { role: "user", content: trimmed };
+        setMessages((prev) => [...prev, userMessage].slice(-10));
+        setQuery("");
+        setIsSending(true);
+
+        try {
+            const data = await sendAdminAIChat(slug, trimmed);
+            const assistantMessage: AdminAIChatMessage = {
+                role: "assistant",
+                content: data.reply || "- I could not find a useful answer right now.\n- Try asking about demand, prep, or waste."
+            };
+            setMessages((prev) => [...prev, assistantMessage].slice(-10));
+        } catch (err) {
+            const fallbackMessage: AdminAIChatMessage = {
+                role: "assistant",
+                content: "- I could not reach the AI service.\n- Use recent sales as your guide and prep with a 10% buffer."
+            };
+            setMessages((prev) => [
+                ...prev,
+                fallbackMessage
+            ].slice(-10));
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    const quickPrompts = [
+        "How much should I prep tomorrow?",
+        "What will demand look like this weekend?",
+        "Which items are causing waste?"
+    ];
+
+    return (
+        <div className="h-[calc(100vh-220px)] min-h-[520px] flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800">AI Assistant</h3>
+                <p className="text-xs text-gray-500">Restaurant operations, grounded in recent sales and stock data.</p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+                {messages.map((message, index) => (
+                    <div
+                        key={`${message.role}-${index}`}
+                        className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                        <div
+                            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-line ${
+                                message.role === "user"
+                                    ? "bg-orange-600 text-white rounded-br-md"
+                                    : "bg-white text-gray-800 border border-gray-200 rounded-bl-md"
+                            }`}
+                        >
+                            {message.content}
+                        </div>
+                    </div>
+                ))}
+                {isSending && (
+                    <div className="flex justify-start">
+                        <div className="bg-white text-gray-500 border border-gray-200 rounded-2xl rounded-bl-md px-4 py-3 text-sm">
+                            Thinking...
+                        </div>
+                    </div>
+                )}
+                <div ref={bottomRef} />
+            </div>
+
+            <div className="p-3 border-t border-gray-100 bg-white space-y-3">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                    {quickPrompts.map((prompt) => (
+                        <button
+                            key={prompt}
+                            type="button"
+                            onClick={() => setQuery(prompt)}
+                            className="shrink-0 text-xs font-bold text-orange-700 bg-orange-50 border border-orange-100 rounded-full px-3 py-1.5"
+                        >
+                            {prompt}
+                        </button>
+                    ))}
+                </div>
+                <form onSubmit={sendMessage} className="flex gap-2">
+                    <input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Ask about prep, demand, or waste"
+                        className="flex-1 min-w-0 border border-gray-300 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                    <button
+                        type="submit"
+                        disabled={isSending || !query.trim()}
+                        className="bg-orange-600 text-white font-bold rounded-xl px-4 py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Send
+                    </button>
+                </form>
+            </div>
+        </div>
     );
 }
 
